@@ -77,7 +77,12 @@ def read_file(file):
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 参数设置")
-    safety_weeks = st.number_input("🛡️ 安全库存周数 (Weeks)", min_value=1, max_value=20, value=3, step=1)
+    
+    # 1. 安全库存设置
+    safety_weeks = st.number_input("🛡️ 安全库存周数 (补货标准)", min_value=1, max_value=20, value=3, step=1)
+    
+    # 2. 冗余库存设置 (新)
+    redundancy_weeks = st.number_input("⚠️ 库存冗余周数 (滞销标准)", min_value=4, max_value=52, value=8, step=1, help="如果库存超过 [7天销量 x 8周]，说明有滞销风险，可能产生仓储费")
     
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
@@ -104,7 +109,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])    
                 df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])       
                 df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F]) 
-                df_base['Cost']   = clean_num(df_m.iloc[:, IDX_M_COST])  # 第5列：采购单价
+                df_base['Cost']   = clean_num(df_m.iloc[:, IDX_M_COST])  # 采购单价
                 
                 df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE]) 
                 df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND]) 
@@ -164,8 +169,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 3. 建议补货数
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
             
-            # 4. 采购总额 = 补货数 * 采购单价(Cost)
+            # 4. 采购总额
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
+            
+            # 5. ★新增：冗余标准 = 7天销量 * 冗余周数
+            df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
 
             # --- G. 整理输出 ---
             cols_export = [
@@ -173,7 +181,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Code',           # 2
                 'Info_E',         # 3
                 'Info_F',         # 4
-                'Cost',           # 5. 采购金额 (单价)
+                'Cost',           # 5
                 'Orange_ID',      # 6
                 'Inbound_Code',   # 7
                 'Sales_7d',       # 8
@@ -181,8 +189,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Jifeng',   # 10
                 'Total_Stock',    # 11
                 'Safety',         # 12
-                'Restock_Qty',    # 13. 建议补货数
-                'Restock_Money',  # 14. 采购总额 (补货数 * 单价)
+                'Restock_Qty',    # 13
+                'Restock_Money',  # 14
+                'Redundancy_Std', # 15 <--- 新增列
             ]
             
             df_out = df_final[cols_export].copy()
@@ -201,7 +210,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Total_Stock': '库存合计',
                 'Safety': f'安全库存({safety_weeks}周)', 
                 'Restock_Qty': '建议补货数',
-                'Restock_Money': '预计采购总额(RMB)' # 明确改为RMB
+                'Restock_Money': '预计采购总额(RMB)',
+                'Redundancy_Std': '库存冗余标准' # 新表头
             }
             df_out.rename(columns=header_map, inplace=True)
 
@@ -209,8 +219,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.divider()
             c1, c2 = st.columns(2)
             c1.metric("📦 总需补货件数", f"{df_out['建议补货数'].sum():,.0f}")
-            c2.metric("💰 预计采购总额 (RMB)", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}") # 使用人民币符号
+            c2.metric("💰 预计采购总额 (RMB)", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}")
 
+            # 样式
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: red; font-weight: bold' if v > 0 else '' for v in s]
 
@@ -219,7 +230,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                       .format({
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', f'安全库存({safety_weeks}周)': '{:.0f}',
                           '建议补货数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
-                          '7天销量': '{:.0f}', '采购单价': '{:,.0f}'
+                          '7天销量': '{:.0f}', '采购单价': '{:,.0f}',
+                          '库存冗余标准': '{:.0f}'
                       }),
                 use_container_width=True, 
                 height=600,
@@ -241,9 +253,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
+                # 表头
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 ws.set_row(0, None, fmt_head)
-                ws.set_column('A:N', 13)
+                ws.set_column('A:O', 13)
 
             st.download_button(
                 "📥 下载最终 Excel",
