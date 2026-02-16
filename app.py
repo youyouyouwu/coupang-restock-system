@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
 import io
-import re
 
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 智能补货系统 (Pro)")
-st.title("📦 Coupang 智能补货系统 (Pro版)")
-st.markdown("### 核心逻辑：基于【近7天销量】预测安全库存，生成含【橙火ID/入库码】的详细工单")
+st.set_page_config(layout="wide", page_title="Coupang 智能补货系统 (Master顺序版)")
+st.title("📦 Coupang 智能补货系统 (Master顺序版)")
+st.markdown("### 核心逻辑：顺序完全参照【基础信息表】，自动高亮需补货行")
 
 # ==========================================
 # 2. 列号配置 (!!! 请务必根据您的Excel实际列号修改 !!!)
@@ -16,18 +15,18 @@ st.markdown("### 核心逻辑：基于【近7天销量】预测安全库存，�
 # A列=0, B列=1, C列=2, D列=3 ... 以此类推
 
 # --- 1. 基础信息表 (Master) ---
-IDX_M_CODE    = 0    # A列: 内部编码 (关联键)
+IDX_M_CODE    = 0    # A列: 内部编码
 IDX_M_SHOP    = 1    # B列: 登品店铺
-IDX_M_NAME    = 2    # C列: 产品名称 (★请确认您的Excel是不是在C列，不是请修改数字)
+IDX_M_NAME    = 2    # C列: 产品名称 (★请确认您的Excel位置)
 IDX_M_SKU     = 3    # D列: SKU ID (关联键)
-IDX_M_ORANGE  = 4    # E列: 橙火ID (★请确认您的Excel此列位置)
-IDX_M_INBOUND = 5    # F列: 产品入库码 (★请确认您的Excel此列位置)
+IDX_M_ORANGE  = 4    # E列: 橙火ID (★请确认您的Excel位置)
+IDX_M_INBOUND = 5    # F列: 产品入库码 (★请确认您的Excel位置)
 IDX_M_COST    = 6    # G列: 采购成本
 IDX_M_PROFIT  = 10   # K列: 单品毛利
 IDX_M_BAR     = 12   # M列: 条码/自发货ID
 
 # --- 2. 销售表 (近7天) ---
-IDX_7D_SKU    = 0    # A列: 注册商品ID / SKU
+IDX_7D_SKU    = 0    # A列: SKU
 IDX_7D_QTY    = 8    # I列: 销售数量
 
 # --- 3. 火箭仓库存表 ---
@@ -39,7 +38,7 @@ IDX_INV_J_BAR = 2    # C列: 条码所在列
 IDX_INV_J_QTY = 10   # K列: 数量所在列
 
 # ==========================================
-# 3. 工具函数 (已修复编码问题)
+# 3. 工具函数
 # ==========================================
 def clean_match_key(series):
     """清洗用于匹配的Key"""
@@ -50,14 +49,13 @@ def clean_num(series):
     return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
 def clean_str(series):
-    """普通清洗字符串(保留原样，只去空格)"""
+    """普通清洗字符串"""
     return series.astype(str).str.replace('nan', '', case=False).str.strip()
 
 def read_file(file):
-    """通用读取函数 (防乱码增强版)"""
+    """通用读取函数 (防乱码)"""
     if file is None: return pd.DataFrame()
     
-    # Excel
     if file.name.endswith(('.xlsx', '.xls', '.xlsm')):
         try:
             file.seek(0)
@@ -66,8 +64,7 @@ def read_file(file):
             st.error(f"Excel读取失败: {file.name}, 错误: {e}")
             return pd.DataFrame()
 
-    # CSV
-    encodings_to_try = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'gbk', 'gb18030', 'latin1']
+    encodings_to_try = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'gbk', 'latin1']
     for encoding in encodings_to_try:
         try:
             file.seek(0)
@@ -75,7 +72,7 @@ def read_file(file):
         except:
             continue
             
-    st.error(f"❌ 无法读取文件: {file.name}。请另存为标准Excel(.xlsx)后重试。")
+    st.error(f"❌ 无法读取文件: {file.name}")
     return pd.DataFrame()
 
 # ==========================================
@@ -87,7 +84,7 @@ with st.sidebar:
     
     st.divider()
     st.header("📂 数据上传")
-    st.info("⚠️ 注意：除基础表外，其他支持多文件上传")
+    st.info("⚠️ 注意：输出结果将严格按照【基础信息表】的顺序排列")
     
     file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['xlsx', 'csv', 'xls'])
     files_sales_7d = st.file_uploader("2. 销售表 (近7天) *多选", type=['xlsx', 'csv', 'xls'], accept_multiple_files=True)
@@ -98,58 +95,43 @@ with st.sidebar:
 # 5. 主逻辑
 # ==========================================
 if file_master and files_sales_7d and files_inv_r and files_inv_j:
-    if st.button("🚀 开始计算补货工单", type="primary", use_container_width=True):
-        with st.spinner("正在提取橙火ID、入库码并计算补货量..."):
+    if st.button("🚀 开始计算 (保持Master顺序)", type="primary", use_container_width=True):
+        with st.spinner("正在计算并匹配 Master 顺序..."):
             
-            # ----------------------------------
-            # A. 读取基础信息 (Master)
-            # ----------------------------------
+            # --- A. 读取 Master (保持原索引) ---
             df_m = read_file(file_master)
             if df_m.empty: st.stop()
 
-            # 提取所有需要的字段 (SKU层级)
+            # 构造基础数据 (保留原始索引以确保顺序)
             df_base = pd.DataFrame()
             try:
-                # 关键匹配键
+                # 匹配键
                 df_base['SKU_ID'] = clean_match_key(df_m.iloc[:, IDX_M_SKU])
                 df_base['Barcode'] = clean_match_key(df_m.iloc[:, IDX_M_BAR])
                 
-                # 基础信息 (完全引用Master)
-                df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])     # 产品编号
-                df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])           # 登品店铺
-                df_base['Name'] = clean_str(df_m.iloc[:, IDX_M_NAME])           # 产品名称
-                df_base['Orange_ID'] = clean_str(df_m.iloc[:, IDX_M_ORANGE])    # 橙火ID
-                df_base['Inbound_Code'] = clean_str(df_m.iloc[:, IDX_M_INBOUND])# 入库码
+                # 展示字段
+                df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])
+                df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])
+                df_base['Name'] = clean_str(df_m.iloc[:, IDX_M_NAME])
+                df_base['Orange_ID'] = clean_str(df_m.iloc[:, IDX_M_ORANGE])
+                df_base['Inbound_Code'] = clean_str(df_m.iloc[:, IDX_M_INBOUND])
                 
-                # 数值
-                df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST]) 
-                df_base['Unit_Profit'] = clean_num(df_m.iloc[:, IDX_M_PROFIT])
+                # 计算字段
+                df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST])
             except IndexError:
-                st.error("❌ 基础表列数不足！请检查代码第2部分【列号配置】中的数字是否正确。")
+                st.error("❌ 基础表列数不足！请检查列号配置。")
                 st.stop()
             
-            # ----------------------------------
-            # B. 读取销售表 (近7天) - 汇总
-            # ----------------------------------
-            s_list = []
-            for f in files_sales_7d:
-                df = read_file(f)
-                if not df.empty: s_list.append(df)
-            
-            if not s_list:
-                st.error("❌ 销售表为空"); st.stop()
-
+            # --- B. 销售汇总 ---
+            s_list = [read_file(f) for f in files_sales_7d]
+            if not s_list: st.error("❌ 销售表为空"); st.stop()
             df_7d_all = pd.concat(s_list, ignore_index=True)
             df_7d_all['Match_SKU'] = clean_match_key(df_7d_all.iloc[:, IDX_7D_SKU])
             df_7d_all['Qty_7Days'] = clean_num(df_7d_all.iloc[:, IDX_7D_QTY])
+            sales_agg = df_7d_all.groupby('Match_SKU')['Qty_7Days'].sum().reset_index()
             
-            # SKU层级销量汇总
-            sales_velocity = df_7d_all.groupby('Match_SKU')['Qty_7Days'].sum().reset_index()
-            
-            # ----------------------------------
-            # C. 读取库存 (Stock) - 汇总
-            # ----------------------------------
-            # 火箭仓
+            # --- C. 库存汇总 ---
+            # 火箭
             r_list = [read_file(f) for f in files_inv_r]
             if r_list:
                 df_r = pd.concat(r_list, ignore_index=True)
@@ -169,78 +151,76 @@ if file_master and files_sales_7d and files_inv_r and files_inv_j:
             else:
                 inv_j_agg = pd.DataFrame(columns=['Match_Bar', 'Jifeng_Stock'])
 
-            # ----------------------------------
-            # D. 合并计算
-            # ----------------------------------
-            # 左连接：以Master表为准，保留所有Master里的SKU信息
-            df_final = pd.merge(df_base, sales_velocity, left_on='SKU_ID', right_on='Match_SKU', how='left')
+            # --- D. 合并 (关键：使用 Left Join 保持 df_base 的顺序和行数) ---
+            df_final = pd.merge(df_base, sales_agg, left_on='SKU_ID', right_on='Match_SKU', how='left')
             df_final = pd.merge(df_final, inv_r_agg, left_on='SKU_ID', right_on='Match_SKU', how='left')
             df_final = pd.merge(df_final, inv_j_agg, left_on='Barcode', right_on='Match_Bar', how='left')
             
-            # 填充缺失值
+            # 填充0
             fill_cols = ['Qty_7Days', 'Rocket_Stock', 'Jifeng_Stock']
             df_final[fill_cols] = df_final[fill_cols].fillna(0)
             
-            # 计算逻辑
+            # 计算
             df_final['Daily_Avg'] = df_final['Qty_7Days'] / 7
             df_final['Safety_Line'] = df_final['Daily_Avg'] * safety_days
             df_final['Total_Stock'] = df_final['Rocket_Stock'] + df_final['Jifeng_Stock']
             
             df_final['Restock_Qty'] = (df_final['Safety_Line'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Restock_Cost'] = df_final['Restock_Qty'] * df_final['Cost']
+
+            # --- E. 样式与展示 ---
             
-            # ----------------------------------
-            # E. 展示与导出
-            # ----------------------------------
-            df_restock = df_final[df_final['Restock_Qty'] > 0].sort_values(by='Restock_Cost', ascending=False)
+            # 统计
+            total_money = df_final['Restock_Cost'].sum()
+            total_items = df_final['Restock_Qty'].sum()
+            need_restock_count = len(df_final[df_final['Restock_Qty'] > 0])
             
             st.divider()
             c1, c2, c3 = st.columns(3)
-            c1.metric("💰 预计补货总金额", f"₩ {df_restock['Restock_Cost'].sum():,.0f}")
-            c2.metric("📦 需补货SKU数", f"{len(df_restock)} 个")
-            c3.metric("🚛 总补货件数", f"{df_restock['Restock_Qty'].sum():,.0f} 件")
+            c1.metric("💰 补货总金额", f"₩ {total_money:,.0f}")
+            c2.metric("📦 需补货SKU", f"{need_restock_count} / {len(df_final)} 个")
+            c3.metric("🚛 补货总件数", f"{total_items:,.0f} 件")
             
-            st.subheader("📋 建议补货清单 (预览前50条)")
+            st.subheader("📋 全量数据预览 (已高亮需补货行)")
             
-            # 展示用的列 (包含新加的列)
-            preview_cols = ['Code', 'Name', 'Shop', 'Orange_ID', 'Inbound_Code', 'Restock_Qty', 'Restock_Cost', 'Rocket_Stock', 'Jifeng_Stock']
-            # 防止列名不存在
-            valid_preview = [c for c in preview_cols if c in df_restock.columns]
+            # 定义展示列
+            cols_show = ['Code', 'Name', 'Shop', 'Orange_ID', 'Inbound_Code', 'Restock_Qty', 'Restock_Cost', 'Qty_7Days', 'Total_Stock']
+            df_display = df_final[cols_show].copy()
+
+            # --- 样式函数 (核心) ---
+            def highlight_rows(row):
+                # 如果补货数 > 0，整行浅红背景
+                if row['Restock_Qty'] > 0:
+                    return ['background-color: #ffe6e6'] * len(row)
+                return [''] * len(row)
+
+            def highlight_col(s):
+                # 单独给 Restock_Qty 列加粗变红
+                return ['color: #d32f2f; font-weight: bold' if v > 0 else '' for v in s]
+
+            # 应用样式
+            st_df = df_display.style.apply(highlight_rows, axis=1)\
+                                    .apply(highlight_col, subset=['Restock_Qty'])\
+                                    .format({'Restock_Cost': '{:,.0f}', 'Qty_7Days': '{:.0f}', 'Total_Stock': '{:.0f}'})
             
-            # 使用原生dataframe展示，避免Style报错
-            st.dataframe(df_restock[valid_preview].head(50), use_container_width=True)
-            
-            # Excel 导出
+            st.dataframe(st_df, use_container_width=True, height=600)
+
+            # --- F. Excel 导出 ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # 1. 补货工单 (给采购/仓库看，包含详细ID)
-                cols_order = ['Code', 'Name', 'Shop', 'SKU_ID', 'Barcode', 'Orange_ID', 'Inbound_Code', 'Cost', 'Restock_Qty', 'Restock_Cost']
-                df_order = df_restock[cols_order].copy()
-                df_order.columns = ['产品编号', '产品名称', '店铺', 'SKU', '条码', '橙火ID', '入库码', '采购单价', '补货数量', '预计金额']
-                df_order.to_excel(writer, index=False, sheet_name='补货工单')
+                # 1. 完整顺序表 (Sheet1)
+                final_output_cols = ['Code', 'Name', 'Shop', 'SKU_ID', 'Barcode', 'Orange_ID', 'Inbound_Code', 
+                                     'Qty_7Days', 'Safety_Line', 'Total_Stock', 
+                                     'Rocket_Stock', 'Jifeng_Stock', 
+                                     'Restock_Qty', 'Restock_Cost']
                 
-                # 2. 全量数据 (分析用)
-                cols_full = ['Code', 'Name', 'Shop', 'SKU_ID', 'Barcode', 'Orange_ID', 'Inbound_Code', 
-                             'Qty_7Days', 'Safety_Line', 'Total_Stock', 'Restock_Qty']
-                df_full = df_final[cols_full].copy()
-                df_full.columns = ['产品编号', '产品名称', '店铺', 'SKU', '条码', '橙火ID', '入库码', 
-                                   '7天销量', '安全库存线', '总库存', '建议补货']
-                df_full.to_excel(writer, index=False, sheet_name='全量数据')
+                df_export = df_final[final_output_cols].copy()
+                df_export.columns = ['产品编号', '产品名称', '店铺', 'SKU', '条码', '橙火ID', '入库码', 
+                                     '7天销量', '安全库存线', '总库存', 
+                                     'Rocket库存', '极风库存', 
+                                     '建议补货数', '补货金额']
                 
-                # 格式设置
-                wb = writer.book
-                ws = writer.sheets['补货工单']
-                fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-                ws.set_row(0, None, fmt_header)
-                ws.set_column('A:J', 15)
-
-            st.download_button(
-                label="📥 下载详细补货工单 (Excel)",
-                data=output.getvalue(),
-                file_name=f"Restock_Order_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.ms-excel",
-                type="primary"
-            )
-
-else:
-    st.info("👈 请在左侧上传文件 (所有文件支持多选)")
+                df_export.to_excel(writer, index=False, sheet_name='全量补货表(Master顺序)')
+                
+                # 2. 纯补货单 (Sheet2 - 仅需补货的)
+                df_buy_only = df_export[df_export['建议补货数'] > 0].copy()
