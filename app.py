@@ -37,7 +37,7 @@ IDX_INV_J_BAR = 2    # C列: 条码/入库码 (与Master M列匹配)
 IDX_INV_J_QTY = 10   # K列: 数量
 
 # ==========================================
-# 3. 工具函数 (已修复 nan 问题)
+# 3. 工具函数
 # ==========================================
 def clean_match_key(series):
     """清洗匹配键: 去空格、转大写、去.0、去nan"""
@@ -77,7 +77,6 @@ def read_file(file):
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 参数设置")
-    # ★ 修改点：单位改为周
     safety_weeks = st.number_input("🛡️ 安全库存周数 (Weeks)", min_value=1, max_value=20, value=3, step=1, help="例如输入3，则安全库存 = 7天销量 × 3")
     
     st.divider()
@@ -151,7 +150,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
-            # --- F. 计算 ---
+            # --- F. 计算逻辑 (核心修改点) ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
@@ -160,14 +159,17 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
             # 2. 安全库存 = 7天销量 * 周数
-            # ★ 修改点：Safety = Sales_7d * safety_weeks
             df_final['Safety'] = df_final['Sales_7d'] * safety_weeks
             
-            # 3. 补货数
+            # 3. 建议补货数 = (安全库存 - 库存合计)
+            # 如果 (安全库存 - 库存合计) > 0，则显示差值
+            # 如果 (安全库存 - 库存合计) <= 0，则显示 0
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
+            
+            # 4. 补货金额
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
 
-            # --- G. 整理输出 (调整列顺序) ---
+            # --- G. 整理输出 ---
             cols_export = [
                 'Shop',           # 1
                 'Code',           # 2
@@ -181,7 +183,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Jifeng',   # 10
                 'Total_Stock',    # 11
                 'Safety',         # 12
-                'Restock_Qty',    # 13
+                'Restock_Qty',    # 13 (待补单量)
                 'Restock_Money',  # 14
             ]
             
@@ -199,7 +201,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Orange': '橙火库存',
                 'Stock_Jifeng': '极风库存',
                 'Total_Stock': '库存合计',
-                'Safety': f'安全库存({safety_weeks}周)', # 表头显示周数
+                'Safety': f'安全库存({safety_weeks}周)', 
                 'Restock_Qty': '建议补货数',
                 'Restock_Money': '补货总额'
             }
@@ -207,12 +209,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             # --- H. 展示 ---
             st.divider()
-            st.warning(f"💡 当前计算逻辑：安全库存 = 7天销量 × {safety_weeks}周")
-            
             c1, c2 = st.columns(2)
             c1.metric("📦 总需补货件数", f"{df_out['建议补货数'].sum():,.0f}")
             c2.metric("💰 总补货金额", f"₩ {df_out['补货总额'].sum():,.0f}")
 
+            # 样式：高亮补货数 (正数高亮)
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: red; font-weight: bold' if v > 0 else '' for v in s]
 
@@ -240,7 +241,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
                 
-                # 红色高亮 (建议补货数现在是第13列，索引12)
+                # 红色高亮 (建议补货数在第13列，索引12)
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
