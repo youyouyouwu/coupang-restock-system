@@ -19,7 +19,7 @@ IDX_M_CODE    = 0    # A列: 产品编码
 IDX_M_SHOP    = 1    # B列: 店铺
 IDX_M_COL_E   = 4    # E列: 基础信息E
 IDX_M_COL_F   = 5    # F列: SKU名称
-IDX_M_COST    = 6    # G列: 采购金额 (采购单价)
+IDX_M_COST    = 6    # G列: 采购单价 (第5列)
 
 IDX_M_ORANGE  = 3    # D列: 橙火ID (匹配橙火)
 IDX_M_INBOUND = 12   # M列: 入库码 (匹配极风)
@@ -77,7 +77,7 @@ def read_file(file):
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 参数设置")
-    safety_weeks = st.number_input("🛡️ 安全库存周数 (Weeks)", min_value=1, max_value=20, value=3, step=1, help="例如输入3，则安全库存 = 7天销量 × 3")
+    safety_weeks = st.number_input("🛡️ 安全库存周数 (Weeks)", min_value=1, max_value=20, value=3, step=1)
     
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
@@ -103,8 +103,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])          
                 df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])    
                 df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])       
-                df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F]) # SKU名称
-                df_base['Cost']   = clean_num(df_m.iloc[:, IDX_M_COST])  # 采购金额
+                df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F]) 
+                df_base['Cost']   = clean_num(df_m.iloc[:, IDX_M_COST])  # 第5列：采购单价
                 
                 df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE]) 
                 df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND]) 
@@ -150,7 +150,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
-            # --- F. 计算逻辑 (核心修改点) ---
+            # --- F. 计算逻辑 ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
@@ -158,15 +158,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 1. 库存合计
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
-            # 2. 安全库存 = 7天销量 * 周数
+            # 2. 安全库存
             df_final['Safety'] = df_final['Sales_7d'] * safety_weeks
             
-            # 3. 建议补货数 = (安全库存 - 库存合计)
-            # 如果 (安全库存 - 库存合计) > 0，则显示差值
-            # 如果 (安全库存 - 库存合计) <= 0，则显示 0
+            # 3. 建议补货数
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
             
-            # 4. 补货金额
+            # 4. 采购总额 = 补货数 * 采购单价(Cost)
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
 
             # --- G. 整理输出 ---
@@ -175,7 +173,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Code',           # 2
                 'Info_E',         # 3
                 'Info_F',         # 4
-                'Cost',           # 5
+                'Cost',           # 5. 采购金额 (单价)
                 'Orange_ID',      # 6
                 'Inbound_Code',   # 7
                 'Sales_7d',       # 8
@@ -183,8 +181,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Jifeng',   # 10
                 'Total_Stock',    # 11
                 'Safety',         # 12
-                'Restock_Qty',    # 13 (待补单量)
-                'Restock_Money',  # 14
+                'Restock_Qty',    # 13. 建议补货数
+                'Restock_Money',  # 14. 采购总额 (补货数 * 单价)
             ]
             
             df_out = df_final[cols_export].copy()
@@ -194,7 +192,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Code': '产品编码',
                 'Info_E': '基础信息E列',
                 'Info_F': 'SKU名称',
-                'Cost': '采购金额',  
+                'Cost': '采购单价',  
                 'Orange_ID': '橙火ID (D列)',
                 'Inbound_Code': '入库码 (M列)',
                 'Sales_7d': '7天销量',
@@ -203,7 +201,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Total_Stock': '库存合计',
                 'Safety': f'安全库存({safety_weeks}周)', 
                 'Restock_Qty': '建议补货数',
-                'Restock_Money': '补货总额'
+                'Restock_Money': '预计采购总额(RMB)' # 明确改为RMB
             }
             df_out.rename(columns=header_map, inplace=True)
 
@@ -211,19 +209,17 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.divider()
             c1, c2 = st.columns(2)
             c1.metric("📦 总需补货件数", f"{df_out['建议补货数'].sum():,.0f}")
-            c2.metric("💰 总补货金额", f"₩ {df_out['补货总额'].sum():,.0f}")
+            c2.metric("💰 预计采购总额 (RMB)", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}") # 使用人民币符号
 
-            # 样式：高亮补货数 (正数高亮)
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: red; font-weight: bold' if v > 0 else '' for v in s]
 
-            # hide_index=True 隐藏行号
             st.dataframe(
                 df_out.style.apply(highlight_restock, subset=['建议补货数'])
                       .format({
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', f'安全库存({safety_weeks}周)': '{:.0f}',
-                          '建议补货数': '{:.0f}', '补货总额': '{:,.0f}', 
-                          '7天销量': '{:.0f}', '采购金额': '{:,.0f}'
+                          '建议补货数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
+                          '7天销量': '{:.0f}', '采购单价': '{:,.0f}'
                       }),
                 use_container_width=True, 
                 height=600,
@@ -252,7 +248,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Final_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_RMB_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
