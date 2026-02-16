@@ -24,7 +24,6 @@ IDX_M_INBOUND = 12   # M列: 入库码 (第6列显示 & 匹配极风)
 
 # 其他辅助列
 IDX_M_COST    = 6    # G列: 采购成本
-IDX_M_PROFIT  = 10   # K列: 单品毛利
 
 # --- 2. 销售表 (近7天) ---
 IDX_7D_SKU    = 0    # A列: SKU/ID (默认匹配D列)
@@ -39,23 +38,13 @@ IDX_INV_J_BAR = 2    # C列: 条码/入库码 (与Master M列匹配)
 IDX_INV_J_QTY = 10   # K列: 数量
 
 # ==========================================
-# 3. 工具函数 (已修复 nan 显示问题)
+# 3. 工具函数 (已修复 nan 问题)
 # ==========================================
 def clean_match_key(series):
-    """
-    清洗匹配键: 
-    1. 转字符串
-    2. 去除 .0 后缀
-    3. 去引号、去空格、转大写
-    4. ★核心修改：把 'NAN' 替换为空字符串
-    """
-    # 转为字符串并转大写
+    """清洗匹配键: 去空格、转大写、去.0、去nan"""
     s = series.astype(str).str.upper()
-    # 去除 Excel 可能产生的 .0
     s = s.str.replace(r'\.0$', '', regex=True)
-    # 去除引号和空格
     s = s.str.replace('"', '').str.strip()
-    # ★ 强制把 'NAN' 变成空字符串
     s = s.replace('NAN', '')
     return s
 
@@ -68,7 +57,7 @@ def clean_str(series):
     return series.astype(str).str.replace('nan', '', case=False).str.strip()
 
 def read_file(file):
-    """读取文件 (支持多种编码)"""
+    """读取文件"""
     if file is None: return pd.DataFrame()
     if file.name.endswith(('.xlsx', '.xls', '.xlsm')):
         try:
@@ -105,13 +94,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
     if st.button("🚀 生成定制报表", type="primary", use_container_width=True):
         with st.spinner("正在按指定列顺序匹配数据..."):
             
-            # --- A. 读取 Master (保留原始顺序) ---
+            # --- A. 读取 Master ---
             df_m = read_file(file_master)
             if df_m.empty: st.stop()
             
             df_base = pd.DataFrame()
             try:
-                # 1. 提取用于展示的列 (应用了新的清洗逻辑，去除 nan)
+                # 1. 提取展示列
                 df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])          
                 df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])    
                 df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])       
@@ -119,7 +108,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE]) 
                 df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND]) 
                 
-                # 2. 提取计算用数据
+                # 2. 提取计算列
                 df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST])
                 
             except IndexError:
@@ -154,15 +143,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 agg_jifeng = pd.DataFrame(columns=['Key','Qty'])
 
             # --- E. 匹配合并 ---
-            # 1. 销量 (匹配橙火ID / D列)
             df_final = pd.merge(df_base, agg_sales, left_on='Orange_ID', right_on='Key', how='left')
             df_final.rename(columns={'Qty': 'Sales_7d'}, inplace=True)
             
-            # 2. 橙火库存 (匹配橙火ID / D列)
             df_final = pd.merge(df_final, agg_orange, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_R'))
             df_final.rename(columns={'Qty': 'Stock_Orange'}, inplace=True)
             
-            # 3. 极风库存 (匹配入库码 / M列)
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
@@ -219,11 +205,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: red; font-weight: bold' if v > 0 else '' for v in s]
 
+            # ★ 核心修改：hide_index=True 隐藏行号
             st.dataframe(
                 df_out.style.apply(highlight_restock, subset=['建议补货数'])
                       .format({'橙火库存': '{:.0f}', '极风库存': '{:.0f}', '建议补货数': '{:.0f}', '补货金额': '{:,.0f}', '7天销量': '{:.0f}'}),
                 use_container_width=True, 
-                height=600
+                height=600,
+                hide_index=True
             )
 
             # Excel 导出
