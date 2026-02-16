@@ -157,4 +157,94 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             # --- F. 计算补货 ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
-            df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(
+            df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
+            df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
+            
+            df_final['Daily'] = df_final['Sales_7d'] / 7
+            df_final['Safety'] = df_final['Daily'] * safety_days
+            df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
+            
+            df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
+            df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
+
+            # --- G. 整理输出列顺序 ---
+            # 您的要求：店铺(B) -> E -> F -> 橙火ID(D) -> 入库码(M) -> 橙火库存 -> 极风库存
+            cols_export = [
+                'Shop',           # 1. 店铺
+                'Info_E',         # 2. E列
+                'Info_F',         # 3. F列
+                'Orange_ID',      # 4. 橙火ID (D列)
+                'Inbound_Code',   # 5. 入库码 (M列)
+                'Stock_Orange',   # 6. 橙火库存
+                'Stock_Jifeng',   # 7. 极风库存
+                'Restock_Qty',    # 8. 建议补货 (重要)
+                'Restock_Money',  # 9. 补货金额
+                'Sales_7d',       # 10. 7天销量 (参考)
+            ]
+            
+            df_out = df_final[cols_export].copy()
+            
+            # 重命名表头 (用户友好的名字)
+            header_map = {
+                'Shop': '店铺名称',
+                'Info_E': '基础信息E列',
+                'Info_F': '基础信息F列',
+                'Orange_ID': '橙火ID (D列)',
+                'Inbound_Code': '入库码 (M列)',
+                'Stock_Orange': '橙火库存',
+                'Stock_Jifeng': '极风库存',
+                'Restock_Qty': '建议补货数',
+                'Restock_Money': '补货金额',
+                'Sales_7d': '7天销量'
+            }
+            df_out.rename(columns=header_map, inplace=True)
+
+            # --- H. 展示与下载 ---
+            st.divider()
+            c1, c2 = st.columns(2)
+            c1.metric("📦 总需补货件数", f"{df_out['建议补货数'].sum():,.0f}")
+            c2.metric("💰 总补货金额", f"₩ {df_out['补货金额'].sum():,.0f}")
+
+            # 样式：高亮补货数
+            def highlight_restock(s):
+                return ['background-color: #ffcccc; color: red; font-weight: bold' if v > 0 else '' for v in s]
+
+            st.dataframe(
+                df_out.style.apply(highlight_restock, subset=['建议补货数'])
+                      .format({'橙火库存': '{:.0f}', '极风库存': '{:.0f}', '建议补货数': '{:.0f}', '补货金额': '{:,.0f}', '7天销量': '{:.0f}'}),
+                use_container_width=True, 
+                height=600
+            )
+
+            # Excel 导出
+            out_io = io.BytesIO()
+            with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
+                # Sheet 1: 结果表
+                df_out.to_excel(writer, index=False, sheet_name='补货计算表')
+                
+                # Sheet 2: 纯补货
+                df_buy = df_out[df_out['建议补货数'] > 0].copy()
+                df_buy.to_excel(writer, index=False, sheet_name='采购单')
+                
+                # 格式化
+                wb = writer.book
+                ws = writer.sheets['补货计算表']
+                
+                # 红色高亮条件格式 (第8列是建议补货数，索引7)
+                fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
+                ws.conditional_format(1, 7, len(df_out), 7, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
+                
+                # 表头格式
+                fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
+                ws.set_row(0, None, fmt_head)
+                ws.set_column('A:J', 13)
+
+            st.download_button(
+                "📥 下载最终 Excel",
+                data=out_io.getvalue(),
+                file_name=f"Coupang_Restock_Custom_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.ms-excel",
+                type="primary"
+            )
+else:
+    st.info("👈 请在左侧上传文件")
