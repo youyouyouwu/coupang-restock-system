@@ -167,15 +167,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Safety'] = df_final['Sales_7d'] * safety_weeks
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
             
-            # 3. 建议补货数 (缺货逻辑: 安全库存 - 现有库存)
+            # 3. 建议补货数 & 补货金额
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
-            
-            # 4. 采购总额
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
             
-            # 5. ★新增：冗余数量 (滞销逻辑: 现有库存 - 冗余标准)
-            # 如果现有库存 > 冗余标准，则显示差值；否则为0
+            # 4. 冗余数量 & 冗余资金 (新增)
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
+            df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
 
             # --- G. 整理输出 ---
             cols_export = [
@@ -194,7 +192,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Restock_Qty',    # 13 (补货)
                 'Restock_Money',  # 14
                 'Redundancy_Std', # 15
-                'Redundancy_Qty', # 16 (冗余数量) <--- 新增
+                'Redundancy_Qty', # 16 
+                'Redundancy_Money', # 17 (冗余资金) <--- 新增
             ]
             
             df_out = df_final[cols_export].copy()
@@ -215,18 +214,20 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Restock_Qty': '建议补货数',
                 'Restock_Money': '预计采购总额(RMB)',
                 'Redundancy_Std': f'库存冗余标准({redundancy_weeks}周)',
-                'Redundancy_Qty': '库存冗余数量'
+                'Redundancy_Qty': '库存冗余数量',
+                'Redundancy_Money': '库存冗余资金'
             }
             df_out.rename(columns=header_map, inplace=True)
 
             # --- H. 展示 ---
             st.divider()
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("📦 总需补货件数", f"{df_out['建议补货数'].sum():,.0f}")
             c2.metric("💰 预计采购总额", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}")
-            c3.metric("⚠️ 严重滞销SKU数", f"{len(df_out[df_out['库存冗余数量'] > 0])} 个")
+            c3.metric("⚠️ 冗余库存件数", f"{df_out['库存冗余数量'].sum():,.0f}")
+            c4.metric("💸 积压库存资金", f"¥ {df_out['库存冗余资金'].sum():,.0f}", delta="需重点关注", delta_color="inverse")
 
-            # 样式设置
+            # 样式
             def highlight_restock(s):
                 # 补货：红色背景
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
@@ -237,14 +238,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             st.dataframe(
                 df_out.style.apply(highlight_restock, subset=['建议补货数'])
-                      .apply(highlight_redundancy, subset=['库存冗余数量'])
+                      .apply(highlight_redundancy, subset=['库存冗余数量', '库存冗余资金']) # 资金列也高亮
                       .format({
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
                           f'安全库存({safety_weeks}周)': '{:.0f}',
                           f'库存冗余标准({redundancy_weeks}周)': '{:.0f}',
                           '建议补货数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
                           '7天销量': '{:.0f}', '采购单价': '{:,.0f}',
-                          '库存冗余数量': '{:.0f}'
+                          '库存冗余数量': '{:.0f}', '库存冗余资金': '{:,.0f}'
                       }),
                 use_container_width=True, 
                 height=600,
@@ -269,17 +270,17 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 # 补货数列 (索引12)
                 ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
-                # 冗余数列 (索引15)
-                ws.conditional_format(1, 15, len(df_out), 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
+                # 冗余数量列 (索引15) & 冗余资金列 (索引16)
+                ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
                 
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 ws.set_row(0, None, fmt_head)
-                ws.set_column('A:P', 13)
+                ws.set_column('A:Q', 13)
 
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Final_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
