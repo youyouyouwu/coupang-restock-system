@@ -167,7 +167,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
 
-            # --- G. 整理输出 ---
+            # --- G. 整理输出 (调整列顺序) ---
             cols_export = [
                 'Shop',           # 1
                 'Code',           # 2
@@ -176,12 +176,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Cost',           # 5
                 'Orange_ID',      # 6
                 'Inbound_Code',   # 7
-                'Stock_Orange',   # 8
-                'Stock_Jifeng',   # 9
-                'Total_Stock',    # 10 <--- 新增：库存合计
-                'Restock_Qty',    # 11
-                'Restock_Money',  # 12
-                'Sales_7d',       # 13
+                'Sales_7d',       # 8 (移到这里)
+                'Stock_Orange',   # 9
+                'Stock_Jifeng',   # 10
+                'Total_Stock',    # 11
+                'Restock_Qty',    # 12
+                'Restock_Money',  # 13
             ]
             
             df_out = df_final[cols_export].copy()
@@ -194,12 +194,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Cost': '采购金额',  
                 'Orange_ID': '橙火ID (D列)',
                 'Inbound_Code': '入库码 (M列)',
+                'Sales_7d': '7天销量', # 移前
                 'Stock_Orange': '橙火库存',
                 'Stock_Jifeng': '极风库存',
-                'Total_Stock': '库存合计', # 新增
+                'Total_Stock': '库存合计',
                 'Restock_Qty': '建议补货数',
-                'Restock_Money': '补货总额', 
-                'Sales_7d': '7天销量'
+                'Restock_Money': '补货总额'
             }
             df_out.rename(columns=header_map, inplace=True)
 
@@ -236,9 +236,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
                 
-                # 红色高亮 (建议补货数在第11列，索引10)
+                # 红色高亮 (建议补货数现在是第12列，索引11)
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
-                ws.conditional_format(1, 10, len(df_out), 10, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
+                ws.conditional_format(1, 11, len(df_out), 11, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 ws.set_row(0, None, fmt_head)
