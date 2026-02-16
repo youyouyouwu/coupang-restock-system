@@ -6,32 +6,34 @@ import re
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 智能补货系统 (精简版)")
-st.title("📦 Coupang 智能补货系统 (纯净版)")
+st.set_page_config(layout="wide", page_title="Coupang 智能补货系统")
+st.title("📦 Coupang 智能补货系统 (精简版)")
 st.markdown("### 核心逻辑：基于【近7天销量】预测安全库存，直接生成补货工单")
 
 # ==========================================
-# 2. 列号配置 (请务必根据您的新Excel核对列号!!!)
+# 2. 列号配置 (请根据实际Excel列号修改)
 # ==========================================
-# --- Master 基础表 ---
-IDX_M_CODE   = 0    # A列: 内部编码 (关联键)
+# --- 1. 基础信息表 (Master) ---
+# A列=0, B列=1, C列=2 ...
+IDX_M_CODE   = 0    # A列: 内部编码
 IDX_M_SHOP   = 1    # B列: 店铺名
 IDX_M_SKU    = 3    # D列: SKU ID (关联键)
-IDX_M_COST   = 6    # G列: 采购成本 (用于算补货金额)
-IDX_M_PROFIT = 10   # K列: 单品毛利 (理论值)
-IDX_M_BAR    = 12   # M列: 条码/自发货ID (关联Jifeng)
+IDX_M_COST   = 6    # G列: 采购成本
+IDX_M_PROFIT = 10   # K列: 单品毛利
+IDX_M_BAR    = 12   # M列: 条码/自发货ID
 
-# --- 7天销量表 (新) ---
-# 假设您导出的7天销量表格式。
-IDX_7D_SKU   = 0    # 假设 A列是SKU/注册商品ID
-IDX_7D_QTY   = 8    # 假设 I列是数量 (请根据实际情况修改!)
+# --- 2. 销售表 (近7天) ---
+# 逻辑：和以前的销售表一样，默认 A列是SKU，I列是数量
+IDX_7D_SKU   = 0    # A列: 注册商品ID / SKU
+IDX_7D_QTY   = 8    # I列: 销售数量
 
-# --- 库存表 ---
-IDX_INV_R_SKU  = 2  # 火箭仓表 SKU所在列
-IDX_INV_R_QTY  = 7  # 火箭仓表 数量所在列
+# --- 3. 火箭仓库存表 ---
+IDX_INV_R_SKU  = 2  # C列: SKU所在列
+IDX_INV_R_QTY  = 7  # H列: 数量所在列
 
-IDX_INV_J_BAR  = 2  # 极风表 条码所在列
-IDX_INV_J_QTY  = 10 # 极风表 数量所在列
+# --- 4. 极风/自发货库存表 ---
+IDX_INV_J_BAR  = 2  # C列: 条码所在列
+IDX_INV_J_QTY  = 10 # K列: 数量所在列
 
 # ==========================================
 # 3. 工具函数
@@ -68,8 +70,8 @@ with st.sidebar:
     st.header("📂 数据上传")
     st.info("请按顺序上传以下表格：")
     
-    file_master = st.file_uploader("1. 清洗后的综合管理表 (Master) *必传", type=['xlsx', 'csv'])
-    file_sales_7d = st.file_uploader("2. 近7天销售数据表 *必传 (用于算周转)", type=['xlsx', 'csv'])
+    file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['xlsx', 'csv'])
+    file_sales_7d = st.file_uploader("2. 销售表 (近7天) *必传", type=['xlsx', 'csv'])
     files_inv_r = st.file_uploader("3. 火箭仓库存 (Rocket) *必传", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_j = st.file_uploader("4. 极风/自发货库存 (Jifeng) *必传", type=['xlsx', 'csv'], accept_multiple_files=True)
 
@@ -93,11 +95,12 @@ if file_master and file_sales_7d and files_inv_r and files_inv_j:
             df_base['Unit_Profit'] = clean_num(df_m.iloc[:, IDX_M_PROFIT])
             
             # ----------------------------------
-            # B. 读取近7天销量 (Velocity)
+            # B. 读取销售表 (近7天)
             # ----------------------------------
             df_7d = read_file(file_sales_7d)
             df_7d['Match_SKU'] = clean_match_key(df_7d.iloc[:, IDX_7D_SKU])
             df_7d['Qty_7Days'] = clean_num(df_7d.iloc[:, IDX_7D_QTY])
+            # 聚合销量 (防止同一SKU多行)
             sales_velocity = df_7d.groupby('Match_SKU')['Qty_7Days'].sum().reset_index()
             
             # ----------------------------------
@@ -120,7 +123,7 @@ if file_master and file_sales_7d and files_inv_r and files_inv_j:
             # ----------------------------------
             # D. 数据合并与计算
             # ----------------------------------
-            # 1. 合并7天销量
+            # 1. 合并销量
             df_final = pd.merge(df_base, sales_velocity, left_on='SKU_ID', right_on='Match_SKU', how='left')
             
             # 2. 合并库存
@@ -172,7 +175,7 @@ if file_master and file_sales_7d and files_inv_r and files_inv_j:
             # 展示表格
             st.subheader("📋 建议补货清单 (Top 50)")
             
-            # 格式化显示列 (移除了净利相关列)
+            # 格式化显示列
             show_cols = ['Code', 'Shop', 'SKU_ID', 'Barcode', 'Qty_7Days', 'Rocket_Stock', 'Jifeng_Stock', 'Restock_Qty', 'Restock_Cost']
             df_show = df_restock[show_cols].head(50).copy()
             
