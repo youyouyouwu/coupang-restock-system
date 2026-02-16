@@ -83,7 +83,7 @@ with st.sidebar:
     
     # 2. 橙火调拨设置 (内部发货)
     st.divider()
-    orange_safety_weeks = st.number_input("🚚 橙火安全周数 (调拨预警)", min_value=1, max_value=10, value=2, step=1, help="橙火仓至少保留多少周库存。低于此标准建议从极风调拨。")
+    orange_safety_weeks = st.number_input("🚚 橙火安全周数 (调拨预警)", min_value=1, max_value=10, value=2, step=1)
     
     # 3. 冗余设置 (滞销)
     st.divider()
@@ -180,9 +180,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
             
-            # 5. ★新增：橙火安全库存 & 建议调拨数量
+            # 5. 橙火安全库存 & 建议调拨数量
             df_final['Orange_Safety_Std'] = df_final['Sales_7d'] * orange_safety_weeks
-            # 如果 (橙火标准 - 橙火现有) > 0，说明橙火缺货，需要调拨
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
             # --- G. 整理输出 ---
@@ -200,12 +199,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Total_Stock',    # 11
                 'Safety',         # 12
                 'Restock_Qty',    # 13 (采购补货)
-                'Restock_Money',  # 14
+                'Restock_Money',  # 14 (采购金额)
                 'Redundancy_Std', # 15
                 'Redundancy_Qty', # 16 
                 'Redundancy_Money', # 17
-                'Orange_Safety_Std', # 18 (橙火标准) <--- 新增
-                'Orange_Transfer_Qty' # 19 (建议调拨) <--- 新增
+                'Orange_Safety_Std', # 18
+                'Orange_Transfer_Qty' # 19
             ]
             
             df_out = df_final[cols_export].copy()
@@ -235,28 +234,27 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             # --- H. 展示 ---
             st.divider()
-            # 关键指标展示
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("📦 需采购总数", f"{df_out['建议采购数'].sum():,.0f}")
             m2.metric("💰 需采购金额", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}")
-            m3.metric("🚚 需调拨总数", f"{df_out['建议调拨数量'].sum():,.0f}", help="需从极风发往橙火的总量")
+            m3.metric("🚚 需调拨总数", f"{df_out['建议调拨数量'].sum():,.0f}")
             m4.metric("💸 积压资金", f"¥ {df_out['冗余资金'].sum():,.0f}", delta_color="inverse")
 
             # 样式设置
             def highlight_restock(s):
-                # 采购：红色
+                # 采购 + 采购金额：红色
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
             
             def highlight_redundancy(s):
-                # 冗余：橙色
+                # 冗余 + 冗余资金：橙色
                 return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if v > 0 else '' for v in s]
 
             def highlight_transfer(s):
-                # 调拨：蓝色 (区分于采购)
+                # 调拨：蓝色
                 return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if v > 0 else '' for v in s]
 
             st.dataframe(
-                df_out.style.apply(highlight_restock, subset=['建议采购数'])
+                df_out.style.apply(highlight_restock, subset=['建议采购数', '预计采购总额(RMB)']) # ★ 两个都红
                       .apply(highlight_redundancy, subset=['冗余数量', '冗余资金']) 
                       .apply(highlight_transfer, subset=['建议调拨数量'])
                       .format({
@@ -279,29 +277,29 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 df_out.to_excel(writer, index=False, sheet_name='补货计算表')
                 
-                # Sheet2: 采购单 (总缺口)
+                # Sheet2: 采购单
                 df_buy = df_out[df_out['建议采购数'] > 0].copy()
                 df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
                 
-                # Sheet3: 调拨单 (橙火缺口)
+                # Sheet3: 调拨单
                 df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
                 df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
                 
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
                 
-                # 格式: 采购红，冗余橙，调拨蓝
+                # 格式定义
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 fmt_orange = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True})
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 
-                # 采购列 (索引12)
-                ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
+                # 采购数量(12) & 采购金额(13) -> 红
+                ws.conditional_format(1, 12, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
-                # 冗余 (索引15, 16)
+                # 冗余数量(15) & 冗余资金(16) -> 橙
                 ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
                 
-                # 调拨 (索引18)
+                # 调拨数量(18) -> 蓝
                 ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
                 
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
@@ -311,7 +309,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v2_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_Final_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
