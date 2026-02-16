@@ -15,12 +15,12 @@ st.markdown("### 核心逻辑：基于Master表顺序，定制列排序与库存
 # A=0, B=1, C=2, D=3, E=4, F=5 ... M=12
 
 # --- 1. 基础信息表 (Master) ---
-# 您指定的关键列：
-IDX_M_SHOP    = 1    # B列: 店铺 (放在第1列)
-IDX_M_COL_E   = 4    # E列: 基础信息E (放在第2列)
-IDX_M_COL_F   = 5    # F列: 基础信息F (放在第3列)
-IDX_M_ORANGE  = 3    # D列: 橙火ID (放在第4列 & 匹配橙火库存)
-IDX_M_INBOUND = 12   # M列: 入库码 (放在第5列 & 匹配极风库存)
+IDX_M_CODE    = 0    # A列: 产品编码 (新增到第2列显示)
+IDX_M_SHOP    = 1    # B列: 店铺 (第1列)
+IDX_M_COL_E   = 4    # E列: 基础信息E (第3列)
+IDX_M_COL_F   = 5    # F列: 基础信息F (第4列)
+IDX_M_ORANGE  = 3    # D列: 橙火ID (第5列 & 匹配橙火库存)
+IDX_M_INBOUND = 12   # M列: 入库码 (第6列 & 匹配极风库存)
 
 # 其他辅助列 (用于计算)
 IDX_M_COST    = 6    # G列: 采购成本
@@ -99,17 +99,15 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             try:
                 # 1. 提取用于展示的列 (按您要求的顺序)
                 df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])          # 第1列: 店铺 (B)
-                df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])       # 第2列: E列
-                df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F])       # 第3列: F列
-                df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE]) # 第4列: 橙火ID (D)
-                df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND]) # 第5列: 入库码 (M)
+                df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])    # 第2列: 产品编码 (A) <--- 新增
+                df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])       # 第3列: E列
+                df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F])       # 第4列: F列
+                df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE]) # 第5列: 橙火ID (D)
+                df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND]) # 第6列: 入库码 (M)
                 
                 # 2. 提取计算用数据
                 df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST])
                 
-                # 3. 设置匹配键 (Key)
-                # 橙火库存 & 销量 -> 匹配 D列 (Orange_ID)
-                # 极风库存 -> 匹配 M列 (Inbound_Code)
             except IndexError:
                 st.error("❌ 基础表列数不足，请检查列配置！"); st.stop()
 
@@ -168,18 +166,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
 
             # --- G. 整理输出列顺序 ---
-            # 您的要求：店铺(B) -> E -> F -> 橙火ID(D) -> 入库码(M) -> 橙火库存 -> 极风库存
+            # 要求：店铺 -> 产品编码 -> E -> F -> 橙火ID -> 入库码 ...
             cols_export = [
                 'Shop',           # 1. 店铺
-                'Info_E',         # 2. E列
-                'Info_F',         # 3. F列
-                'Orange_ID',      # 4. 橙火ID (D列)
-                'Inbound_Code',   # 5. 入库码 (M列)
-                'Stock_Orange',   # 6. 橙火库存
-                'Stock_Jifeng',   # 7. 极风库存
-                'Restock_Qty',    # 8. 建议补货 (重要)
-                'Restock_Money',  # 9. 补货金额
-                'Sales_7d',       # 10. 7天销量 (参考)
+                'Code',           # 2. 产品编码 (A列) <--- 新增
+                'Info_E',         # 3. E列
+                'Info_F',         # 4. F列
+                'Orange_ID',      # 5. 橙火ID (D列)
+                'Inbound_Code',   # 6. 入库码 (M列)
+                'Stock_Orange',   # 7. 橙火库存
+                'Stock_Jifeng',   # 8. 极风库存
+                'Restock_Qty',    # 9. 建议补货 (重要)
+                'Restock_Money',  # 10. 补货金额
+                'Sales_7d',       # 11. 7天销量 (参考)
             ]
             
             df_out = df_final[cols_export].copy()
@@ -187,6 +186,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 重命名表头 (用户友好的名字)
             header_map = {
                 'Shop': '店铺名称',
+                'Code': '产品编码',
                 'Info_E': '基础信息E列',
                 'Info_F': '基础信息F列',
                 'Orange_ID': '橙火ID (D列)',
@@ -230,14 +230,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
                 
-                # 红色高亮条件格式 (第8列是建议补货数，索引7)
+                # 红色高亮条件格式 (建议补货数在第9列，索引8)
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
-                ws.conditional_format(1, 7, len(df_out), 7, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
+                ws.conditional_format(1, 8, len(df_out), 8, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 
                 # 表头格式
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 ws.set_row(0, None, fmt_head)
-                ws.set_column('A:J', 13)
+                ws.set_column('A:K', 13)
 
             st.download_button(
                 "📥 下载最终 Excel",
