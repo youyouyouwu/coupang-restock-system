@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：基于Master表顺序，定制列排序与库存匹配规则")
+st.markdown("### 核心逻辑：仅分析【有入库码】的活跃产品")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -22,7 +22,7 @@ IDX_M_COL_F   = 5    # F列: SKU名称
 IDX_M_COST    = 6    # G列: 采购单价 (第5列)
 
 IDX_M_ORANGE  = 3    # D列: 橙火ID (匹配橙火)
-IDX_M_INBOUND = 12   # M列: 入库码 (匹配极风)
+IDX_M_INBOUND = 12   # M列: 入库码 (核心过滤列 & 匹配极风)
 
 # --- 2. 销售表 (近7天) ---
 IDX_7D_SKU    = 0    # A列: SKU/ID (默认匹配D列)
@@ -80,7 +80,9 @@ with st.sidebar:
     st.header("⚙️ 参数设置")
     
     # 1. 总补货设置 (采购)
-    safety_weeks = st.number_input("🛡️ 总安全库存周数 (采购标准)", min_value=1, max_value=20, value=3, step=1)
+    st.subheader("🛡️ 总安全库存 (采购)")
+    safety_weeks = st.number_input("安全周数 (倍数)", min_value=1, max_value=20, value=3, step=1)
+    min_safety_qty = st.number_input("最低库存基数 (保底)", min_value=0, max_value=100, value=5, step=1, help="即使销量为0，安全库存也会至少设为这个数，防止彻底断货。")
     
     # 2. 橙火调拨设置 (内部发货)
     st.divider()
@@ -102,7 +104,7 @@ with st.sidebar:
 # ==========================================
 if file_master and files_sales and files_inv_r and files_inv_j:
     if st.button("🚀 生成定制报表", type="primary", use_container_width=True):
-        with st.spinner("正在按指定列顺序匹配数据..."):
+        with st.spinner("正在清洗数据并计算..."):
             
             # --- A. 读取 Master ---
             df_m = read_file(file_master)
@@ -123,6 +125,17 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             except IndexError:
                 st.error("❌ 基础表列数不足，请检查列配置！"); st.stop()
 
+            # ★ 核心过滤逻辑：仅保留“入库码”不为空的行 ★
+            initial_count = len(df_base)
+            df_base = df_base[df_base['Inbound_Code'] != '']
+            filtered_count = len(df_base)
+            
+            if filtered_count == 0:
+                st.error("❌ 错误：所有产品的【入库码】均为空！请检查基础表M列是否正确。")
+                st.stop()
+                
+            st.success(f"✅ 已过滤无效SKU：保留 {filtered_count} 个活跃产品 (剔除 {initial_count - filtered_count} 个无入库码产品)")
+
             # --- B. 销售汇总 ---
             s_list = [read_file(f) for f in files_sales]
             if not s_list: st.stop()
@@ -137,12 +150,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_r = pd.concat(r_list, ignore_index=True)
                 df_r['Key'] = clean_match_key(df_r.iloc[:, IDX_INV_R_SKU])
                 df_r['Qty'] = clean_num(df_r.iloc[:, IDX_INV_R_QTY])
-                
                 try:
                     df_r['Fee'] = clean_num(df_r.iloc[:, IDX_INV_R_FEE])
                 except:
                     df_r['Fee'] = 0 
-                
                 agg_orange = df_r.groupby('Key')[['Qty', 'Fee']].sum().reset_index()
             else:
                 agg_orange = pd.DataFrame(columns=['Key','Qty','Fee'])
@@ -176,19 +187,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 1. 库存合计
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
-            # 2. 安全库存 & 冗余标准
-            df_final['Safety'] = df_final['Sales_7d'] * safety_weeks
+            # 2. 安全库存 = Max(7天销量 * 周数, 最低基数)
+            df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
+            df_final['Safety'] = df_final['Safety_Calc'].apply(lambda x: max(x, min_safety_qty))
+            
+            # 3. 冗余标准
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
             
-            # 3. 建议补货数 & 采购总额
+            # 4. 建议补货数 & 采购总额
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
             
-            # 4. 冗余数量 & 冗余资金
+            # 5. 冗余数量 & 冗余资金
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
             
-            # 5. 橙火调拨
+            # 6. 橙火调拨
             df_final['Orange_Safety_Std'] = df_final['Sales_7d'] * orange_safety_weeks
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
@@ -230,7 +244,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Orange': '橙火库存',
                 'Stock_Jifeng': '极风库存',
                 'Total_Stock': '库存合计',
-                'Safety': f'总安全库存({safety_weeks}周)', 
+                'Safety': f'总安全库存(>{min_safety_qty})', 
                 'Restock_Qty': '建议采购数',
                 'Restock_Money': '预计采购总额(RMB)',
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
@@ -245,62 +259,30 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # --- H. 展示 ---
             st.divider()
             
-            # === 1. 核心看板 (4个维度) ===
-            # 计算逻辑：
-            # A. 采购：SKU数量 + 金额
+            # === 1. 核心看板 ===
             buy_mask = df_out['建议采购数'] > 0
             k1_cnt = len(df_out[buy_mask])
             k1_val = df_out.loc[buy_mask, '预计采购总额(RMB)'].sum()
             
-            # B. 冗余：SKU数量 + 资金
             red_mask = df_out['冗余数量'] > 0
             k2_cnt = len(df_out[red_mask])
             k2_val = df_out.loc[red_mask, '冗余资金'].sum()
             
-            # C. 调拨：SKU数量 + 调拨总数
             trans_mask = df_out['建议调拨数量'] > 0
             k3_cnt = len(df_out[trans_mask])
             k3_val = df_out.loc[trans_mask, '建议调拨数量'].sum()
             
-            # D. 库龄：SKU数量 + 仓储费总额 (韩币)
             fee_mask = df_out['本月仓储费(预警)'] > 0
             k4_cnt = len(df_out[fee_mask])
-            k4_val = df_out.loc[fee_mask, '本月仓储费(预警)'].sum() # 求和费用
+            k4_val = df_out.loc[fee_mask, '本月仓储费(预警)'].sum() 
 
             m1, m2, m3, m4 = st.columns(4)
-            
-            # 指标1：采购
-            m1.metric(
-                label="📦 需采购 SKU / 金额",
-                value=f"{k1_cnt} 个",
-                delta=f"¥ {k1_val:,.0f}"
-            )
-            
-            # 指标2：冗余 (反向颜色)
-            m2.metric(
-                label="⚠️ 冗余 SKU / 资金",
-                value=f"{k2_cnt} 个",
-                delta=f"¥ {k2_val:,.0f}",
-                delta_color="inverse"
-            )
-            
-            # 指标3：调拨
-            m3.metric(
-                label="🚚 需调拨 SKU / 数量",
-                value=f"{k3_cnt} 个",
-                delta=f"{k3_val:,.0f} 件"
-            )
-            
-            # 指标4：库龄 (反向颜色)
-            m4.metric(
-                label="🚨 库龄预警 SKU / 总仓储费",
-                value=f"{k4_cnt} 个",
-                delta=f"₩ {k4_val:,.0f}", # 韩币
-                delta_color="inverse"
-            )
+            m1.metric("📦 需采购 SKU / 金额", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
+            m2.metric("⚠️ 冗余 SKU / 资金", f"{k2_cnt} 个", f"¥ {k2_val:,.0f}", delta_color="inverse")
+            m3.metric("🚚 需调拨 SKU / 数量", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
+            m4.metric("🚨 库龄预警 SKU / 总仓储费", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
             # === 2. 表格展示 ===
-            # 样式设置
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
             
@@ -320,7 +302,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                       .apply(highlight_fee, subset=['本月仓储费(预警)'])
                       .format({
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
-                          f'总安全库存({safety_weeks}周)': '{:.0f}',
+                          f'总安全库存(>{min_safety_qty})': '{:.0f}',
                           f'冗余标准({redundancy_weeks}周)': '{:.0f}',
                           f'橙火安全库存({orange_safety_weeks}周)': '{:.0f}',
                           '建议采购数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
@@ -339,15 +321,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 df_out.to_excel(writer, index=False, sheet_name='补货计算表')
                 
-                # Sheet2: 采购单
                 df_buy = df_out[df_out['建议采购数'] > 0].copy()
                 df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
                 
-                # Sheet3: 调拨单
                 df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
                 df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
                 
-                # Sheet4: 库龄预警单
                 df_fee = df_out[df_out['本月仓储费(预警)'] > 0].copy()
                 df_fee.to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
                 
@@ -371,7 +350,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v5_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v7_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
