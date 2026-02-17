@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：关键表头高亮 + 最低库存保底 + 斑马纹")
+st.markdown("### 核心逻辑：看板标题加粗 + 关键表头高亮 + 斑马纹")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -252,10 +252,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             k4_val = df_display.loc[fee_mask, '本月仓储费(预警)'].sum() 
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("📦 需采购 SKU / 金额", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
-            m2.metric("⚠️ 冗余 SKU / 资金", f"{k2_cnt} 个", f"¥ {k2_val:,.0f}", delta_color="inverse")
-            m3.metric("🚚 需调拨 SKU / 数量", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
-            m4.metric("🚨 库龄预警 SKU / 总仓储费", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
+            # ★ 看板标题加粗
+            m1.metric("**📦 需采购 SKU / 金额**", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
+            m2.metric("**⚠️ 冗余 SKU / 资金**", f"{k2_cnt} 个", f"¥ {k2_val:,.0f}", delta_color="inverse")
+            m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
+            m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
             # === 样式定义 ===
             def highlight_zebra(row):
@@ -305,7 +306,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 ws = writer.sheets['补货计算表']
                 
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-                # ★ 关键表头格式：深色+粗体
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1})
                 
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) 
@@ -325,7 +325,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 # 2. 设置通用表头
                 ws.set_row(0, None, fmt_header)
                 
-                # ★ 3. 覆盖设置重点表头 (深色背景)
+                # 3. 覆盖设置重点表头 (深色背景 + 粗体)
                 # 列索引: Code=1, SKU=3, 采购数=12, 冗余数=15, 调拨数=18, 仓储费=19
                 target_headers = {
                     1: '产品编码', 3: 'SKU名称', 
@@ -350,7 +350,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel (包含全量数据)",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v14_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v15_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
