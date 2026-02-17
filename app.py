@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：【最低库存保底】同时应用于总库存与橙火调拨")
+st.markdown("### 核心逻辑：最低库存保底 + 按产品编码斑马纹高亮")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -15,7 +15,7 @@ st.markdown("### 核心逻辑：【最低库存保底】同时应用于总库存
 # A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17
 
 # --- 1. 基础信息表 (Master) ---
-IDX_M_CODE    = 0    # A列: 产品编码
+IDX_M_CODE    = 0    # A列: 产品编码 (斑马纹分组依据)
 IDX_M_SHOP    = 1    # B列: 店铺
 IDX_M_COL_E   = 4    # E列: 基础信息E
 IDX_M_COL_F   = 5    # F列: SKU名称
@@ -176,19 +176,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 1. 库存合计
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
-            # ★ 2. 总安全库存 (有入库码则应用保底)
+            # 2. 安全库存 (有入库码则应用保底)
             df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
             
             def apply_safety_floor(row):
                 base_val = row['Safety_Calc']
-                if row['Inbound_Code']: # 有入库码，应用保底
+                if row['Inbound_Code']: 
                     return max(base_val, min_safety_qty)
                 else:
                     return base_val 
             
             df_final['Safety'] = df_final.apply(apply_safety_floor, axis=1)
             
-            # 3. 冗余标准 (不应用保底，纯按销量算，这样没销量的保底库存就会被算作冗余，符合您的需求)
+            # 3. 冗余标准
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
             
             # 4. 建议补货数 & 采购总额
@@ -199,19 +199,18 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
             
-            # ★ 6. 橙火安全库存 (同样应用保底逻辑！)
+            # 6. 橙火调拨
             df_final['Orange_Safety_Calc'] = df_final['Sales_7d'] * orange_safety_weeks
             
             def apply_orange_floor(row):
                 base_val = row['Orange_Safety_Calc']
-                if row['Inbound_Code']: # 有入库码，应用保底
+                if row['Inbound_Code']: 
                     return max(base_val, min_safety_qty)
                 else:
                     return base_val
             
             df_final['Orange_Safety_Std'] = df_final.apply(apply_orange_floor, axis=1)
             
-            # 7. 建议调拨数量
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
             # --- G. 整理输出 ---
@@ -258,11 +257,15 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
                 'Redundancy_Qty': '冗余数量',
                 'Redundancy_Money': '冗余资金',
-                'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})', # 表头提示
+                'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})', 
                 'Orange_Transfer_Qty': '建议调拨数量',
                 'Storage_Fee': '本月仓储费(预警)'
             }
             df_out.rename(columns=header_map, inplace=True)
+
+            # ★ 计算斑马纹分组 ID (基于产品编码变化)
+            # 逻辑：如果当前行编码 != 上一行编码，组ID + 1。然后取模 2 得到 0 或 1
+            zebra_group_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
 
             # --- H. 展示 ---
             st.divider()
@@ -291,6 +294,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             m4.metric("🚨 库龄预警 SKU / 总仓储费", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
             # === 2. 表格展示 ===
+            # 样式设置
+            def highlight_zebra(row):
+                # 获取当前行的索引，查找对应的组ID
+                # 注意：Styler 传入的 row 是 Series，拥有 .name 属性即为 index
+                try:
+                    gid = zebra_group_ids.loc[row.name]
+                    if gid == 1:
+                        # 浅灰色背景作为斑马纹
+                        return ['background-color: #f7f7f7'] * len(row)
+                except:
+                    pass
+                return [''] * len(row)
+
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
             
@@ -303,62 +319,72 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             def highlight_fee(s):
                 return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if v > 0 else '' for v in s]
 
-            st.dataframe(
-                df_out.style.apply(highlight_restock, subset=['建议采购数', '预计采购总额(RMB)']) 
-                      .apply(highlight_redundancy, subset=['冗余数量', '冗余资金']) 
-                      .apply(highlight_transfer, subset=['建议调拨数量'])
-                      .apply(highlight_fee, subset=['本月仓储费(预警)'])
-                      .format({
-                          '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
-                          f'总安全库存(有码>{min_safety_qty})': '{:.0f}',
-                          f'冗余标准({redundancy_weeks}周)': '{:.0f}',
-                          f'橙火安全库存(有码>{min_safety_qty})': '{:.0f}',
-                          '建议采购数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
-                          '7天销量': '{:.0f}', '采购单价': '{:,.0f}',
-                          '冗余数量': '{:.0f}', '冗余资金': '{:,.0f}',
-                          '建议调拨数量': '{:.0f}',
-                          '本月仓储费(预警)': '{:,.0f}'
-                      }),
-                use_container_width=True, 
-                height=600,
-                hide_index=True
-            )
+            # 应用样式：先应用斑马纹(作为底色)，再应用其他高亮(覆盖)
+            st_df = df_out.style.apply(highlight_zebra, axis=1) \
+                          .apply(highlight_restock, subset=['建议采购数', '预计采购总额(RMB)']) \
+                          .apply(highlight_redundancy, subset=['冗余数量', '冗余资金']) \
+                          .apply(highlight_transfer, subset=['建议调拨数量']) \
+                          .apply(highlight_fee, subset=['本月仓储费(预警)']) \
+                          .format({
+                              '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
+                              f'总安全库存(有码>{min_safety_qty})': '{:.0f}',
+                              f'冗余标准({redundancy_weeks}周)': '{:.0f}',
+                              f'橙火安全库存(有码>{min_safety_qty})': '{:.0f}',
+                              '建议采购数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
+                              '7天销量': '{:.0f}', '采购单价': '{:,.0f}',
+                              '冗余数量': '{:.0f}', '冗余资金': '{:,.0f}',
+                              '建议调拨数量': '{:.0f}',
+                              '本月仓储费(预警)': '{:,.0f}'
+                          })
+
+            st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
             # Excel 导出
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
+                # 写入数据
                 df_out.to_excel(writer, index=False, sheet_name='补货计算表')
                 
-                df_buy = df_out[df_out['建议采购数'] > 0].copy()
-                df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
-                
-                df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
-                df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
-                
-                df_fee = df_out[df_out['本月仓储费(预警)'] > 0].copy()
-                df_fee.to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
+                # 写入其他 Sheet
+                df_out[df_out['建议采购数'] > 0].to_excel(writer, index=False, sheet_name='采购单(找工厂)')
+                df_out[df_out['建议调拨数量'] > 0].to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
+                df_out[df_out['本月仓储费(预警)'] > 0].to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
                 
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
+                
+                # 定义格式
+                fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
+                fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) # 斑马纹浅灰
                 
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 fmt_orange = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True})
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
                 
+                # 1. 应用斑马纹 (整行)
+                # 遍历每一行，根据 zebra_group_ids 判断是否需要灰色背景
+                # 注意：Excel行从0开始，但header占了第0行，所以数据从第1行开始
+                for i, gid in enumerate(zebra_group_ids):
+                    if gid == 1:
+                        # set_row(row, height, cell_format, options)
+                        # 这里 height=None (自动), 应用 fmt_zebra
+                        ws.set_row(i + 1, None, fmt_zebra)
+                
+                # 2. 设置表头
+                ws.set_row(0, None, fmt_header)
+                ws.set_column('A:T', 13)
+                
+                # 3. 应用条件格式 (会覆盖 set_row 的背景色)
                 ws.conditional_format(1, 12, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
                 ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
                 ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
                 ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
-                
-                fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-                ws.set_row(0, None, fmt_head)
-                ws.set_column('A:T', 13)
 
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v9_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v10_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
