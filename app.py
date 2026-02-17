@@ -7,12 +7,12 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：精简表头 + 关键高亮 + 最低库存保底 + 斑马纹")
+st.markdown("### 核心逻辑：全表统一视觉 + 智能隐藏无关列")
 
 # ==========================================
-# 2. 列号配置 (请确认 Excel 实际位置)
+# 2. 列号配置
 # ==========================================
-# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17
+# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17 ... T=19
 
 # --- 1. 基础信息表 (Master) ---
 IDX_M_CODE    = 0    # A列: 产品编码
@@ -167,7 +167,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
-            # 安全库存 (保底逻辑)
             df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
             def apply_safety_floor(row):
                 base_val = row['Safety_Calc']
@@ -204,11 +203,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             header_map = {
                 'Shop': '店铺名称',
                 'Code': '产品编码',
-                'Info_E': '基础信息', # 精简
+                'Info_E': '基础信息',
                 'Info_F': 'SKU名称',
                 'Cost': '采购单价',  
-                'Orange_ID': '橙火ID', # 精简
-                'Inbound_Code': '入库码', # 精简
+                'Orange_ID': '橙火ID', 
+                'Inbound_Code': '入库码', 
                 'Sales_7d': '7天销量',
                 'Stock_Orange': '橙火库存',
                 'Stock_Jifeng': '极风库存',
@@ -294,20 +293,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # Excel 导出
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
-                out_zebra_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
-                
-                df_out.to_excel(writer, index=False, sheet_name='补货计算表')
-                df_out[df_out['建议采购数'] > 0].to_excel(writer, index=False, sheet_name='采购单(找工厂)')
-                df_out[df_out['建议调拨数量'] > 0].to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
-                df_out[df_out['本月仓储费(预警)'] > 0].to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
-                
                 wb = writer.book
-                ws = writer.sheets['补货计算表']
                 
+                # 定义通用样式
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-                # ★ 关键表头格式：深色+粗体
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1})
-                
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) 
                 fmt_bold_col = wb.add_format({'bold': True})
                 
@@ -317,40 +307,61 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_orange_norm = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': False})
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
-                
-                # 1. 斑马纹
-                for i, gid in enumerate(out_zebra_ids):
-                    if gid == 1: ws.set_row(i + 1, None, fmt_zebra)
-                
-                # 2. 设置通用表头
-                ws.set_row(0, None, fmt_header)
-                
-                # 3. 覆盖设置重点表头 (深色背景 + 粗体)
-                # Code=1, SKU=3, 采购数=12, 冗余数=15, 调拨数=18, 仓储费=19
-                target_headers = {
-                    1: '产品编码', 3: 'SKU名称', 
-                    12: '建议采购数', 15: '冗余数量', 
-                    18: '建议调拨数量', 19: '本月仓储费(预警)'
-                }
-                for col_idx, text in target_headers.items():
-                    ws.write(0, col_idx, text, fmt_header_dark)
-                
-                ws.set_column('A:T', 13)
-                
-                # 4. 内容列格式
-                ws.conditional_format(1, 1, len(df_out), 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                ws.conditional_format(1, 3, len(df_out), 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
-                ws.conditional_format(1, 13, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
-                ws.conditional_format(1, 15, len(df_out), 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
-                ws.conditional_format(1, 16, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
-                ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
-                ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+
+                # --- 封装格式化函数 ---
+                def format_sheet(ws, df_curr, hide_cols=[]):
+                    # 1. 斑马纹
+                    curr_zebra_ids = (df_curr['产品编码'] != df_curr['产品编码'].shift()).cumsum() % 2
+                    for i, gid in enumerate(curr_zebra_ids):
+                        if gid == 1: ws.set_row(i + 1, None, fmt_zebra)
+                    
+                    # 2. 表头
+                    ws.set_row(0, None, fmt_header)
+                    target_headers = {1:'产品编码', 3:'SKU名称', 12:'建议采购数', 15:'冗余数量', 18:'建议调拨数量', 19:'本月仓储费(预警)'}
+                    for col_idx, text in target_headers.items():
+                        ws.write(0, col_idx, text, fmt_header_dark)
+                    ws.set_column('A:T', 13)
+
+                    # 3. 隐藏列
+                    for c_idx in hide_cols:
+                        # xlsxwriter set_column(first_col, last_col, width, cell_format, options)
+                        # 隐藏时 width=None
+                        ws.set_column(c_idx, c_idx, None, None, {'hidden': True})
+
+                    # 4. 条件格式
+                    nrows = len(df_curr)
+                    ws.conditional_format(1, 1, nrows, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws.conditional_format(1, 3, nrows, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws.conditional_format(1, 12, nrows, 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                    ws.conditional_format(1, 13, nrows, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                    ws.conditional_format(1, 15, nrows, 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                    ws.conditional_format(1, 16, nrows, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                    ws.conditional_format(1, 18, nrows, 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                    ws.conditional_format(1, 19, nrows, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+
+                # --- 写入 Sheet1: 全量 ---
+                df_out.to_excel(writer, index=False, sheet_name='补货计算表')
+                format_sheet(writer.sheets['补货计算表'], df_out)
+
+                # --- 写入 Sheet2: 采购单 (隐藏O-T: 14,15,16,17,18,19) ---
+                df_buy = df_out[df_out['建议采购数'] > 0].copy()
+                df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
+                format_sheet(writer.sheets['采购单(找工厂)'], df_buy, hide_cols=[14,15,16,17,18,19])
+
+                # --- 写入 Sheet3: 调拨单 (隐藏P,Q,T: 15,16,19) ---
+                df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
+                df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
+                format_sheet(writer.sheets['调拨单(发橙火)'], df_trans, hide_cols=[15,16,19])
+
+                # --- 写入 Sheet4: 预警单 (只看T: 隐藏L-S: 11-18) ---
+                df_fee = df_out[df_out['本月仓储费(预警)'] > 0].copy()
+                df_fee.to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
+                format_sheet(writer.sheets['库龄预警单(需重入库)'], df_fee, hide_cols=[11,12,13,14,15,16,17,18])
 
             st.download_button(
                 "📥 下载最终 Excel (包含全量数据)",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v16_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v17_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
