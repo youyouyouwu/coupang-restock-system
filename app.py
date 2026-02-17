@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：最低库存保底 + 按产品编码斑马纹高亮")
+st.markdown("### 核心逻辑：最低库存保底 + 斑马纹 + 金额列视觉降噪")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -263,8 +263,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             }
             df_out.rename(columns=header_map, inplace=True)
 
-            # ★ 计算斑马纹分组 ID (基于产品编码变化)
-            # 逻辑：如果当前行编码 != 上一行编码，组ID + 1。然后取模 2 得到 0 或 1
+            # ★ 计算斑马纹分组 ID
             zebra_group_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
 
             # --- H. 展示 ---
@@ -296,22 +295,27 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # === 2. 表格展示 ===
             # 样式设置
             def highlight_zebra(row):
-                # 获取当前行的索引，查找对应的组ID
-                # 注意：Styler 传入的 row 是 Series，拥有 .name 属性即为 index
                 try:
                     gid = zebra_group_ids.loc[row.name]
                     if gid == 1:
-                        # 浅灰色背景作为斑马纹
                         return ['background-color: #f7f7f7'] * len(row)
-                except:
-                    pass
+                except: pass
                 return [''] * len(row)
 
-            def highlight_restock(s):
+            # ★ 修改：区分数量(Bold)和金额(Normal)
+            def highlight_restock_qty(s):
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
             
-            def highlight_redundancy(s):
+            def highlight_restock_money(s):
+                # 金额不加粗
+                return ['background-color: #ffcccc; color: #b71c1c' if v > 0 else '' for v in s]
+            
+            def highlight_redundancy_qty(s):
                 return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if v > 0 else '' for v in s]
+            
+            def highlight_redundancy_money(s):
+                # 金额不加粗
+                return ['background-color: #ffe0b2; color: #e65100' if v > 0 else '' for v in s]
 
             def highlight_transfer(s):
                 return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if v > 0 else '' for v in s]
@@ -319,10 +323,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             def highlight_fee(s):
                 return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if v > 0 else '' for v in s]
 
-            # 应用样式：先应用斑马纹(作为底色)，再应用其他高亮(覆盖)
+            # 应用样式
             st_df = df_out.style.apply(highlight_zebra, axis=1) \
-                          .apply(highlight_restock, subset=['建议采购数', '预计采购总额(RMB)']) \
-                          .apply(highlight_redundancy, subset=['冗余数量', '冗余资金']) \
+                          .apply(highlight_restock_qty, subset=['建议采购数']) \
+                          .apply(highlight_restock_money, subset=['预计采购总额(RMB)']) \
+                          .apply(highlight_redundancy_qty, subset=['冗余数量']) \
+                          .apply(highlight_redundancy_money, subset=['冗余资金']) \
                           .apply(highlight_transfer, subset=['建议调拨数量']) \
                           .apply(highlight_fee, subset=['本月仓储费(预警)']) \
                           .format({
@@ -355,36 +361,47 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 
                 # 定义格式
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
-                fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) # 斑马纹浅灰
+                fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) 
                 
-                fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
-                fmt_orange = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True})
+                # ★ 新增：区分粗体(Quantity)和普通(Money)
+                fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
+                fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False}) # 不加粗
+                
+                fmt_orange_bold = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True})
+                fmt_orange_norm = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': False}) # 不加粗
+                
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
                 
-                # 1. 应用斑马纹 (整行)
-                # 遍历每一行，根据 zebra_group_ids 判断是否需要灰色背景
-                # 注意：Excel行从0开始，但header占了第0行，所以数据从第1行开始
+                # 1. 应用斑马纹
                 for i, gid in enumerate(zebra_group_ids):
                     if gid == 1:
-                        # set_row(row, height, cell_format, options)
-                        # 这里 height=None (自动), 应用 fmt_zebra
                         ws.set_row(i + 1, None, fmt_zebra)
                 
                 # 2. 设置表头
                 ws.set_row(0, None, fmt_header)
                 ws.set_column('A:T', 13)
                 
-                # 3. 应用条件格式 (会覆盖 set_row 的背景色)
-                ws.conditional_format(1, 12, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
-                ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
+                # 3. 应用条件格式
+                # 采购数量(12) -> 红粗
+                ws.conditional_format(1, 12, len(df_out), 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                # 采购金额(13) -> 红细 (New)
+                ws.conditional_format(1, 13, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                
+                # 冗余数量(15) -> 橙粗
+                ws.conditional_format(1, 15, len(df_out), 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                # 冗余资金(16) -> 橙细 (New)
+                ws.conditional_format(1, 16, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                
+                # 调拨(18)
                 ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                # 仓储费(19)
                 ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v10_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v11_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
