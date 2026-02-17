@@ -131,20 +131,18 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_sales['Qty'] = clean_num(df_sales.iloc[:, IDX_7D_QTY])
             agg_sales = df_sales.groupby('Key')['Qty'].sum().reset_index()
 
-            # --- C. 橙火库存 (新增：读取仓储费) ---
+            # --- C. 橙火库存 (包含 R列 仓储费) ---
             r_list = [read_file(f) for f in files_inv_r]
             if r_list:
                 df_r = pd.concat(r_list, ignore_index=True)
                 df_r['Key'] = clean_match_key(df_r.iloc[:, IDX_INV_R_SKU])
                 df_r['Qty'] = clean_num(df_r.iloc[:, IDX_INV_R_QTY])
                 
-                # ★ 新增：读取R列仓储费
                 try:
                     df_r['Fee'] = clean_num(df_r.iloc[:, IDX_INV_R_FEE])
                 except:
-                    df_r['Fee'] = 0 # 防止有的表格没有R列
+                    df_r['Fee'] = 0 
                 
-                # 聚合：数量和费用都求和
                 agg_orange = df_r.groupby('Key')[['Qty', 'Fee']].sum().reset_index()
             else:
                 agg_orange = pd.DataFrame(columns=['Key','Qty','Fee'])
@@ -163,7 +161,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final = pd.merge(df_base, agg_sales, left_on='Orange_ID', right_on='Key', how='left')
             df_final.rename(columns={'Qty': 'Sales_7d'}, inplace=True)
             
-            # 合并橙火 (包含 Qty 和 Fee)
             df_final = pd.merge(df_final, agg_orange, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_R'))
             df_final.rename(columns={'Qty': 'Stock_Orange', 'Fee': 'Storage_Fee'}, inplace=True)
             
@@ -174,7 +171,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
-            df_final['Storage_Fee'] = df_final['Storage_Fee'].fillna(0) # 填充费用
+            df_final['Storage_Fee'] = df_final['Storage_Fee'].fillna(0)
             
             # 1. 库存合计
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
@@ -209,14 +206,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Stock_Jifeng',   # 10
                 'Total_Stock',    # 11
                 'Safety',         # 12
-                'Restock_Qty',    # 13 (采购补货)
+                'Restock_Qty',    # 13 
                 'Restock_Money',  # 14
                 'Redundancy_Std', # 15
                 'Redundancy_Qty', # 16 
                 'Redundancy_Money', # 17
                 'Orange_Safety_Std', # 18
                 'Orange_Transfer_Qty', # 19
-                'Storage_Fee'     # 20 (新: 仓储费)
+                'Storage_Fee'     # 20
             ]
             
             df_out = df_final[cols_export].copy()
@@ -241,20 +238,68 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Money': '冗余资金',
                 'Orange_Safety_Std': f'橙火安全库存({orange_safety_weeks}周)',
                 'Orange_Transfer_Qty': '建议调拨数量',
-                'Storage_Fee': '本月仓储费(预警)' # 新表头
+                'Storage_Fee': '本月仓储费(预警)'
             }
             df_out.rename(columns=header_map, inplace=True)
 
             # --- H. 展示 ---
             st.divider()
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("📦 需采购总数", f"{df_out['建议采购数'].sum():,.0f}")
-            m2.metric("💰 需采购金额", f"¥ {df_out['预计采购总额(RMB)'].sum():,.0f}")
-            m3.metric("🚚 需调拨总数", f"{df_out['建议调拨数量'].sum():,.0f}")
-            # 计算有多少SKU产生了仓储费
-            fee_sku_count = len(df_out[df_out['本月仓储费(预警)'] > 0])
-            m4.metric("🚨 仓储费异常SKU", f"{fee_sku_count} 个", delta="建议重新入库", delta_color="inverse")
+            
+            # === 1. 核心看板 (4个维度) ===
+            # 计算逻辑：
+            # A. 采购：SKU数量 + 金额
+            buy_mask = df_out['建议采购数'] > 0
+            k1_cnt = len(df_out[buy_mask])
+            k1_val = df_out.loc[buy_mask, '预计采购总额(RMB)'].sum()
+            
+            # B. 冗余：SKU数量 + 资金
+            red_mask = df_out['冗余数量'] > 0
+            k2_cnt = len(df_out[red_mask])
+            k2_val = df_out.loc[red_mask, '冗余资金'].sum()
+            
+            # C. 调拨：SKU数量 + 调拨总数
+            trans_mask = df_out['建议调拨数量'] > 0
+            k3_cnt = len(df_out[trans_mask])
+            k3_val = df_out.loc[trans_mask, '建议调拨数量'].sum()
+            
+            # D. 库龄：SKU数量 + 仓储费总额 (韩币)
+            fee_mask = df_out['本月仓储费(预警)'] > 0
+            k4_cnt = len(df_out[fee_mask])
+            k4_val = df_out.loc[fee_mask, '本月仓储费(预警)'].sum() # 求和费用
 
+            m1, m2, m3, m4 = st.columns(4)
+            
+            # 指标1：采购
+            m1.metric(
+                label="📦 需采购 SKU / 金额",
+                value=f"{k1_cnt} 个",
+                delta=f"¥ {k1_val:,.0f}"
+            )
+            
+            # 指标2：冗余 (反向颜色)
+            m2.metric(
+                label="⚠️ 冗余 SKU / 资金",
+                value=f"{k2_cnt} 个",
+                delta=f"¥ {k2_val:,.0f}",
+                delta_color="inverse"
+            )
+            
+            # 指标3：调拨
+            m3.metric(
+                label="🚚 需调拨 SKU / 数量",
+                value=f"{k3_cnt} 个",
+                delta=f"{k3_val:,.0f} 件"
+            )
+            
+            # 指标4：库龄 (反向颜色)
+            m4.metric(
+                label="🚨 库龄预警 SKU / 总仓储费",
+                value=f"{k4_cnt} 个",
+                delta=f"₩ {k4_val:,.0f}", # 韩币
+                delta_color="inverse"
+            )
+
+            # === 2. 表格展示 ===
             # 样式设置
             def highlight_restock(s):
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
@@ -266,14 +311,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if v > 0 else '' for v in s]
             
             def highlight_fee(s):
-                # 仓储费：紫色高亮
                 return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if v > 0 else '' for v in s]
 
             st.dataframe(
                 df_out.style.apply(highlight_restock, subset=['建议采购数', '预计采购总额(RMB)']) 
                       .apply(highlight_redundancy, subset=['冗余数量', '冗余资金']) 
                       .apply(highlight_transfer, subset=['建议调拨数量'])
-                      .apply(highlight_fee, subset=['本月仓储费(预警)']) # 新增样式
+                      .apply(highlight_fee, subset=['本月仓储费(预警)'])
                       .format({
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
                           f'总安全库存({safety_weeks}周)': '{:.0f}',
@@ -295,29 +339,30 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 df_out.to_excel(writer, index=False, sheet_name='补货计算表')
                 
+                # Sheet2: 采购单
                 df_buy = df_out[df_out['建议采购数'] > 0].copy()
                 df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
                 
+                # Sheet3: 调拨单
                 df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
                 df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
                 
-                # Sheet4: 库龄预警单 (有仓储费的)
+                # Sheet4: 库龄预警单
                 df_fee = df_out[df_out['本月仓储费(预警)'] > 0].copy()
                 df_fee.to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
                 
                 wb = writer.book
                 ws = writer.sheets['补货计算表']
                 
-                # 格式定义
                 fmt_red = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 fmt_orange = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True})
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
-                fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True}) # 紫色
+                fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
                 
-                ws.conditional_format(1, 12, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red}) # 采购
-                ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange}) # 冗余
-                ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue}) # 调拨
-                ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple}) # 仓储费(索引19)
+                ws.conditional_format(1, 12, len(df_out), 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red})
+                ws.conditional_format(1, 15, len(df_out), 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange})
+                ws.conditional_format(1, 18, len(df_out), 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
                 
                 fmt_head = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 ws.set_row(0, None, fmt_head)
@@ -326,7 +371,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v3_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v5_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
