@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：关键信息加粗 + 最低库存保底 + 斑马纹")
+st.markdown("### 核心逻辑：最低库存保底 + 斑马纹 + 快速单品查询")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -15,7 +15,7 @@ st.markdown("### 核心逻辑：关键信息加粗 + 最低库存保底 + 斑马
 # A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17
 
 # --- 1. 基础信息表 (Master) ---
-IDX_M_CODE    = 0    # A列: 产品编码 (斑马纹分组依据)
+IDX_M_CODE    = 0    # A列: 产品编码 (斑马纹分组依据 & 查询依据)
 IDX_M_SHOP    = 1    # B列: 店铺
 IDX_M_COL_E   = 4    # E列: 基础信息E
 IDX_M_COL_F   = 5    # F列: SKU名称
@@ -91,6 +91,11 @@ with st.sidebar:
     # 3. 冗余设置 (滞销)
     st.divider()
     redundancy_weeks = st.number_input("⚠️ 库存冗余周数 (滞销标准)", min_value=4, max_value=52, value=8, step=1)
+    
+    # 4. 单品查询 (新增功能)
+    st.divider()
+    st.subheader("🔍 单品库存查询")
+    search_key = st.text_input("输入产品编码 (A列)", placeholder="输入后按回车查询，留空看全部", help="支持模糊搜索。例如输入'A001'，会显示所有包含A001的编码。")
     
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
@@ -213,7 +218,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
-            # --- G. 整理输出 ---
+            # --- G. 整理输出 df_out (这是全量数据，用于导出) ---
             cols_export = [
                 'Shop',           # 1
                 'Code',           # 2
@@ -263,28 +268,39 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             }
             df_out.rename(columns=header_map, inplace=True)
 
-            # ★ 计算斑马纹分组 ID
-            zebra_group_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
-
-            # --- H. 展示 ---
+            # --- H. 处理展示数据 (Search Logic) ---
             st.divider()
             
-            # === 1. 核心看板 ===
-            buy_mask = df_out['建议采购数'] > 0
-            k1_cnt = len(df_out[buy_mask])
-            k1_val = df_out.loc[buy_mask, '预计采购总额(RMB)'].sum()
+            # 如果有搜索词，则过滤数据；否则显示全量
+            if search_key:
+                # 模糊搜索 (不区分大小写)
+                df_display = df_out[df_out['产品编码'].astype(str).str.contains(search_key, case=False, na=False)]
+                if df_display.empty:
+                    st.warning(f"⚠️ 未找到编码包含 '{search_key}' 的产品")
+                else:
+                    st.success(f"🔎 已筛选出 {len(df_display)} 个包含 '{search_key}' 的产品")
+            else:
+                df_display = df_out
+
+            # ★ 计算斑马纹分组 ID (基于当前展示的 DataFrame)
+            zebra_group_ids = (df_display['产品编码'] != df_display['产品编码'].shift()).cumsum() % 2
             
-            red_mask = df_out['冗余数量'] > 0
-            k2_cnt = len(df_out[red_mask])
-            k2_val = df_out.loc[red_mask, '冗余资金'].sum()
+            # === 1. 核心看板 (基于 df_display 计算) ===
+            buy_mask = df_display['建议采购数'] > 0
+            k1_cnt = len(df_display[buy_mask])
+            k1_val = df_display.loc[buy_mask, '预计采购总额(RMB)'].sum()
             
-            trans_mask = df_out['建议调拨数量'] > 0
-            k3_cnt = len(df_out[trans_mask])
-            k3_val = df_out.loc[trans_mask, '建议调拨数量'].sum()
+            red_mask = df_display['冗余数量'] > 0
+            k2_cnt = len(df_display[red_mask])
+            k2_val = df_display.loc[red_mask, '冗余资金'].sum()
             
-            fee_mask = df_out['本月仓储费(预警)'] > 0
-            k4_cnt = len(df_out[fee_mask])
-            k4_val = df_out.loc[fee_mask, '本月仓储费(预警)'].sum() 
+            trans_mask = df_display['建议调拨数量'] > 0
+            k3_cnt = len(df_display[trans_mask])
+            k3_val = df_display.loc[trans_mask, '建议调拨数量'].sum()
+            
+            fee_mask = df_display['本月仓储费(预警)'] > 0
+            k4_cnt = len(df_display[fee_mask])
+            k4_val = df_display.loc[fee_mask, '本月仓储费(预警)'].sum() 
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("📦 需采购 SKU / 金额", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
@@ -302,10 +318,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 except: pass
                 return [''] * len(row)
             
-            # ★ 样式：产品编码 & SKU名称 加粗
+            # 字体加粗样式
             def highlight_bold_info(s):
                 return ['font-weight: bold'] * len(s)
 
+            # 颜色样式 (区分 Quantity粗体, Money细体)
             def highlight_restock_qty(s):
                 return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
             
@@ -325,7 +342,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if v > 0 else '' for v in s]
 
             # 应用样式
-            st_df = df_out.style.apply(highlight_zebra, axis=1) \
+            st_df = df_display.style.apply(highlight_zebra, axis=1) \
                           .apply(highlight_bold_info, subset=['产品编码', 'SKU名称']) \
                           .apply(highlight_restock_qty, subset=['建议采购数']) \
                           .apply(highlight_restock_money, subset=['预计采购总额(RMB)']) \
@@ -347,7 +364,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
-            # Excel 导出
+            # Excel 导出 (始终导出全量 df_out)
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 # 写入数据
@@ -364,10 +381,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 # 定义格式
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) 
+                fmt_bold_col = wb.add_format({'bold': True}) # 加粗列
                 
-                # ★ 定义加粗格式
-                fmt_bold_col = wb.add_format({'bold': True})
-
                 fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True})
                 fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False})
                 
@@ -377,8 +392,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
                 
-                # 1. 应用斑马纹
-                for i, gid in enumerate(zebra_group_ids):
+                # 1. 斑马纹 (重新计算 df_out 的分组)
+                out_zebra_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
+                for i, gid in enumerate(out_zebra_ids):
                     if gid == 1:
                         ws.set_row(i + 1, None, fmt_zebra)
                 
@@ -386,8 +402,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 ws.set_row(0, None, fmt_header)
                 ws.set_column('A:T', 13)
                 
-                # ★ 3. 关键列加粗 (产品编码=Col 1, SKU名称=Col 3)
-                # 使用 conditional_format 叠加在斑马纹之上 (formula=TRUE 保证应用到所有行)
+                # 3. 关键列加粗 (产品编码=Col 1, SKU名称=Col 3)
                 ws.conditional_format(1, 1, len(df_out), 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
                 ws.conditional_format(1, 3, len(df_out), 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
 
@@ -402,9 +417,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 ws.conditional_format(1, 19, len(df_out), 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
             st.download_button(
-                "📥 下载最终 Excel",
+                "📥 下载最终 Excel (包含全量数据)",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v12_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_Final_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
