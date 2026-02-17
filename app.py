@@ -7,17 +7,17 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：全表统一视觉 + 智能隐藏无关列")
+st.markdown("### 核心逻辑：分表极简展示 + 统一视觉标准")
 
 # ==========================================
-# 2. 列号配置
+# 2. 列号配置 (请确认 Excel 实际位置)
 # ==========================================
-# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17 ... T=19
+# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12 ... R=17
 
 # --- 1. 基础信息表 (Master) ---
 IDX_M_CODE    = 0    # A列: 产品编码
 IDX_M_SHOP    = 1    # B列: 店铺
-IDX_M_COL_E   = 4    # E列: 基础信息
+IDX_M_COL_E   = 4    # E列: 基础信息E
 IDX_M_COL_F   = 5    # F列: SKU名称
 IDX_M_COST    = 6    # G列: 采购单价
 
@@ -167,6 +167,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
+            # 安全库存 (保底逻辑)
             df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
             def apply_safety_floor(row):
                 base_val = row['Safety_Calc']
@@ -293,11 +294,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # Excel 导出
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
-                wb = writer.book
+                out_zebra_ids = (df_out['产品编码'] != df_out['产品编码'].shift()).cumsum() % 2
                 
-                # 定义通用样式
+                df_out.to_excel(writer, index=False, sheet_name='补货计算表')
+                df_out[df_out['建议采购数'] > 0].to_excel(writer, index=False, sheet_name='采购单(找工厂)')
+                df_out[df_out['建议调拨数量'] > 0].to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
+                df_out[df_out['本月仓储费(预警)'] > 0].to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
+                
+                wb = writer.book
+                ws = writer.sheets['补货计算表']
+                
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1})
+                
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2'}) 
                 fmt_bold_col = wb.add_format({'bold': True})
                 
@@ -324,8 +333,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
                     # 3. 隐藏列
                     for c_idx in hide_cols:
-                        # xlsxwriter set_column(first_col, last_col, width, cell_format, options)
-                        # 隐藏时 width=None
                         ws.set_column(c_idx, c_idx, None, None, {'hidden': True})
 
                     # 4. 条件格式
@@ -348,10 +355,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
                 format_sheet(writer.sheets['采购单(找工厂)'], df_buy, hide_cols=[14,15,16,17,18,19])
 
-                # --- 写入 Sheet3: 调拨单 (隐藏P,Q,T: 15,16,19) ---
+                # --- 写入 Sheet3: 调拨单 (隐藏 M-R 和 T: 12-17, 19) ---
                 df_trans = df_out[df_out['建议调拨数量'] > 0].copy()
                 df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
-                format_sheet(writer.sheets['调拨单(发橙火)'], df_trans, hide_cols=[15,16,19])
+                format_sheet(writer.sheets['调拨单(发橙火)'], df_trans, hide_cols=[12,13,14,15,16,17,19])
 
                 # --- 写入 Sheet4: 预警单 (只看T: 隐藏L-S: 11-18) ---
                 df_fee = df_out[df_out['本月仓储费(预警)'] > 0].copy()
@@ -361,7 +368,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel (包含全量数据)",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v17_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v18_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
