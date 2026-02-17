@@ -7,7 +7,7 @@ import io
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 智能补货 (最终版)")
 st.title("📦 Coupang 智能补货 (定制导出版)")
-st.markdown("### 核心逻辑：最低库存基数仅对【有入库码】的活跃产品生效")
+st.markdown("### 核心逻辑：【最低库存保底】同时应用于总库存与橙火调拨")
 
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
@@ -82,7 +82,7 @@ with st.sidebar:
     # 1. 总补货设置 (采购)
     st.subheader("🛡️ 总安全库存 (采购)")
     safety_weeks = st.number_input("安全周数 (倍数)", min_value=1, max_value=20, value=3, step=1)
-    min_safety_qty = st.number_input("最低库存基数 (保底)", min_value=0, max_value=100, value=5, step=1, help="仅对【有入库码】的产品生效：即使销量为0，安全库存也会至少设为这个数。")
+    min_safety_qty = st.number_input("最低库存基数 (保底)", min_value=0, max_value=100, value=5, step=1, help="仅对【有入库码】的产品生效：即使销量为0，系统也会强制要求总库存和橙火库存至少达到这个数量。")
     
     # 2. 橙火调拨设置 (内部发货)
     st.divider()
@@ -124,9 +124,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 
             except IndexError:
                 st.error("❌ 基础表列数不足，请检查列配置！"); st.stop()
-
-            # ★ 修改点：移除了全局过滤逻辑，保留所有行 ★
-            # (之前的 df_base = df_base[df_base['Inbound_Code'] != ''] 已删除)
 
             # --- B. 销售汇总 ---
             s_list = [read_file(f) for f in files_sales]
@@ -179,21 +176,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             # 1. 库存合计
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
             
-            # 2. 安全库存 (★ 核心修改点)
-            # 逻辑：如果有入库码，应用保底；如果没有入库码，按实际销量算（通常为0）
+            # ★ 2. 总安全库存 (有入库码则应用保底)
             df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
             
             def apply_safety_floor(row):
                 base_val = row['Safety_Calc']
-                # 只有当【入库码】不为空时，才应用最小基数(5)
-                if row['Inbound_Code']: 
+                if row['Inbound_Code']: # 有入库码，应用保底
                     return max(base_val, min_safety_qty)
                 else:
-                    return base_val # 无入库码，不强制保底
+                    return base_val 
             
             df_final['Safety'] = df_final.apply(apply_safety_floor, axis=1)
             
-            # 3. 冗余标准
+            # 3. 冗余标准 (不应用保底，纯按销量算，这样没销量的保底库存就会被算作冗余，符合您的需求)
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
             
             # 4. 建议补货数 & 采购总额
@@ -204,8 +199,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
             
-            # 6. 橙火调拨
-            df_final['Orange_Safety_Std'] = df_final['Sales_7d'] * orange_safety_weeks
+            # ★ 6. 橙火安全库存 (同样应用保底逻辑！)
+            df_final['Orange_Safety_Calc'] = df_final['Sales_7d'] * orange_safety_weeks
+            
+            def apply_orange_floor(row):
+                base_val = row['Orange_Safety_Calc']
+                if row['Inbound_Code']: # 有入库码，应用保底
+                    return max(base_val, min_safety_qty)
+                else:
+                    return base_val
+            
+            df_final['Orange_Safety_Std'] = df_final.apply(apply_orange_floor, axis=1)
+            
+            # 7. 建议调拨数量
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
             # --- G. 整理输出 ---
@@ -252,7 +258,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
                 'Redundancy_Qty': '冗余数量',
                 'Redundancy_Money': '冗余资金',
-                'Orange_Safety_Std': f'橙火安全库存({orange_safety_weeks}周)',
+                'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})', # 表头提示
                 'Orange_Transfer_Qty': '建议调拨数量',
                 'Storage_Fee': '本月仓储费(预警)'
             }
@@ -306,7 +312,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                           '橙火库存': '{:.0f}', '极风库存': '{:.0f}', '库存合计': '{:.0f}', 
                           f'总安全库存(有码>{min_safety_qty})': '{:.0f}',
                           f'冗余标准({redundancy_weeks}周)': '{:.0f}',
-                          f'橙火安全库存({orange_safety_weeks}周)': '{:.0f}',
+                          f'橙火安全库存(有码>{min_safety_qty})': '{:.0f}',
                           '建议采购数': '{:.0f}', '预计采购总额(RMB)': '{:,.0f}', 
                           '7天销量': '{:.0f}', '采购单价': '{:,.0f}',
                           '冗余数量': '{:.0f}', '冗余资金': '{:,.0f}',
@@ -352,7 +358,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.download_button(
                 "📥 下载最终 Excel",
                 data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v8_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Coupang_Restock_Full_v9_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
