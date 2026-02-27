@@ -352,10 +352,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
             # ==========================================
-            # Excel 导出（全Sheet视觉优化：居中+合并+修复右侧空白蓝表头/斑马纹）
+            # Excel 导出（自适应列宽 + 合并 + 居中 + 修复空白区域）
             # ==========================================
             def col_to_excel(col_idx: int) -> str:
-                """0 -> A, 25 -> Z, 26 -> AA ..."""
                 n = col_idx + 1
                 s = ""
                 while n:
@@ -363,19 +362,42 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     s = chr(65 + r) + s
                 return s
 
+            def estimate_col_widths(df: pd.DataFrame, fixed_col_names=None, fixed_width=24,
+                                    min_w=6, max_w=22, header_pad=2, cell_pad=2):
+                """
+                用字符长度估算列宽（xlsxwriter不支持真正autofit）
+                - fixed_col_names: 这些列用固定宽（比如“基础信息”）
+                """
+                fixed_col_names = set(fixed_col_names or [])
+                widths = []
+                for col in df.columns:
+                    if col in fixed_col_names:
+                        widths.append(fixed_width)
+                        continue
+                    # header长度
+                    best = len(str(col)) + header_pad
+                    # 内容长度（抽样/全量都行，这里全量但很快）
+                    ser = df[col]
+                    # 防止NaN
+                    ser = ser.fillna('')
+                    # 转字符串
+                    lens = ser.astype(str).map(len)
+                    if len(lens) > 0:
+                        best = max(best, int(lens.max()) + cell_pad)
+                    best = max(min_w, min(max_w, best))
+                    widths.append(best)
+                return widths
+
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
                 # --- 统一居中格式（列默认）---
                 fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
-                fmt_center_wrap = wb.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
-
-                # 表头（居中）
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
-                # 斑马纹（仅作用于有效列范围，用条件格式）
+                # 斑马纹（仅作用于有效列范围）
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
 
                 # 条件高亮（全部加居中）
@@ -396,29 +418,26 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     return (codes != codes.shift()).cumsum() % 2
 
                 def write_headers(ws, headers, dark_map):
-                    # ✅ 不用 set_row(0)！逐格写入，避免整行染蓝
+                    # 逐格写表头（避免整行染蓝）
                     for c, h in enumerate(headers):
                         ws.write(0, c, h, fmt_header)
                     for c_idx, txt in dark_map.items():
                         if 0 <= c_idx < len(headers):
                             ws.write(0, c_idx, txt, fmt_header_dark)
 
-                def apply_center_and_width(ws, ncols, width=13):
-                    # ✅ 只设置有效列范围，默认居中；右侧空白列不动
-                    if ncols > 0:
-                        ws.set_column(0, ncols - 1, width, fmt_center)
+                def apply_width_and_center(ws, widths, center_fmt):
+                    # 逐列设置宽度 + 居中（只对有效列）
+                    for i, w in enumerate(widths):
+                        ws.set_column(i, i, w, center_fmt)
 
                 def add_zebra_conditional(ws, nrows, ncols, helper_col_idx):
-                    # ✅ 斑马纹用 conditional_format，限制在有效列范围，不会染右侧空白
                     if nrows <= 0 or ncols <= 0:
                         return
                     helper_col_letter = col_to_excel(helper_col_idx)
-                    # 例如：=$U2=1
                     formula = f'=${helper_col_letter}2=1'
                     ws.conditional_format(1, 0, nrows, ncols - 1, {'type': 'formula', 'criteria': formula, 'format': fmt_zebra})
 
                 def merge_visual_columns(ws, df_curr, col_indices_to_merge, helper_gid: pd.Series):
-                    # ✅ 合并仅是视觉，不影响计算
                     codes = df_curr['产品编码'].astype(str).fillna('')
                     start = 0
                     for i in range(1, len(codes) + 1):
@@ -435,8 +454,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                             start = i
 
                 def apply_common_conditionals(ws, nrows, mapping):
-                    # mapping: list of tuples (col, kind)
-                    # kind: 'bold', 'red_bold', 'red_norm', 'orange_bold', 'orange_norm', 'blue', 'purple'
                     if nrows <= 0:
                         return
                     for col, kind in mapping:
@@ -455,41 +472,45 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         elif kind == 'purple':
                             ws.conditional_format(1, col, nrows, col, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
-                def build_sheet(ws, df_curr, dark_headers_map, merge_cols, hide_cols=None, width=13):
+                def build_sheet(ws, df_curr, dark_headers_map, merge_cols, fixed_width_cols=None,
+                                fixed_width=24, min_w=6, max_w=22, hide_cols=None):
                     """
-                    ws: worksheet
-                    df_curr: dataframe already written to sheet
-                    dark_headers_map: dict col_idx->header_text
-                    merge_cols: list of col indices to merge visually (by 产品编码 group)
-                    hide_cols: list of col indices to hide
+                    - fixed_width_cols: 不参与自适应列宽的列名（例如：['基础信息']）
                     """
                     hide_cols = hide_cols or []
                     headers = list(df_curr.columns)
                     nrows = len(df_curr)
                     ncols = len(headers)
 
-                    # 1) 居中+列宽（仅有效列）
-                    apply_center_and_width(ws, ncols, width=width)
+                    # 1) 计算列宽（字符长度估算）
+                    widths = estimate_col_widths(
+                        df_curr,
+                        fixed_col_names=fixed_width_cols or [],
+                        fixed_width=fixed_width,
+                        min_w=min_w,
+                        max_w=max_w
+                    )
+                    apply_width_and_center(ws, widths, fmt_center)
 
-                    # 2) 写表头（逐格写入，只到有效列）
+                    # 2) 写表头（逐格写入）
                     write_headers(ws, headers, dark_headers_map)
 
-                    # 3) zebra_id 辅助列（隐藏），用于限制斑马纹范围（不染右侧空白）
+                    # 3) zebra_id 辅助列（隐藏）
                     gid = get_group_ids(df_curr) if nrows > 0 else pd.Series(dtype=int)
-                    helper_col_idx = ncols  # 放在最后一列右侧
-                    ws.write(0, helper_col_idx, '_zebra', fmt_header)  # header也写一下，但会隐藏
+                    helper_col_idx = ncols
+                    ws.write(0, helper_col_idx, '_zebra', fmt_header)
                     for i in range(nrows):
                         ws.write(i + 1, helper_col_idx, int(gid.iloc[i]), fmt_center)
                     ws.set_column(helper_col_idx, helper_col_idx, None, None, {'hidden': True})
 
-                    # 4) 斑马纹（conditional_format 限制在有效列范围）
+                    # 4) 斑马纹（仅有效列范围）
                     add_zebra_conditional(ws, nrows, ncols, helper_col_idx)
 
-                    # 5) 合并视觉列（用 gid 判断是否斑马背景）
+                    # 5) 合并视觉列
                     if nrows > 0 and merge_cols:
                         merge_visual_columns(ws, df_curr, merge_cols, gid)
 
-                    # 6) 隐藏列（只在有效列范围内隐藏）
+                    # 6) 隐藏列
                     for c in hide_cols:
                         if 0 <= c < ncols:
                             ws.set_column(c, c, None, None, {'hidden': True})
@@ -503,11 +524,15 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_sheet1.to_excel(writer, index=False, sheet_name=name1)
                 ws1 = writer.sheets[name1]
 
-                # 深色表头列：0店铺 2产品编码 4SKU名称 13建议采购数 16冗余数量 19建议调拨数量 20仓储费
                 dark1 = {2: '产品编码', 4: 'SKU名称', 13: '建议采购数', 16: '冗余数量', 19: '建议调拨数量', 20: '本月仓储费(预警)'}
-                nrows1, ncols1 = build_sheet(ws1, df_sheet1, dark1, merge_cols=[0, 2])
+                nrows1, ncols1 = build_sheet(
+                    ws1, df_sheet1, dark1,
+                    merge_cols=[0, 2],
+                    fixed_width_cols=['基础信息'],  # ✅ 基础信息固定宽，不参与自适应
+                    fixed_width=26,               # 你可以把这里改成 22/28 看你喜欢
+                    min_w=6, max_w=22
+                )
 
-                # 条件格式列（Sheet1索引）
                 apply_common_conditionals(ws1, nrows1, [
                     (2, 'bold'),
                     (4, 'bold'),
@@ -528,7 +553,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 ws2 = writer.sheets[name2]
 
                 dark2 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
-                nrows2, ncols2 = build_sheet(ws2, df_buy, dark2, merge_cols=[0, 1], hide_cols=[14, 15, 16, 17, 18, 19])
+                nrows2, ncols2 = build_sheet(
+                    ws2, df_buy, dark2,
+                    merge_cols=[0, 1],
+                    fixed_width_cols=['基础信息'],
+                    fixed_width=26,
+                    min_w=6, max_w=22,
+                    hide_cols=[14, 15, 16, 17, 18, 19]
+                )
 
                 apply_common_conditionals(ws2, nrows2, [
                     (1, 'bold'),
@@ -549,8 +581,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_trans.to_excel(writer, index=False, sheet_name=name3)
                 ws3 = writer.sheets[name3]
 
-                dark3 = dark2
-                nrows3, ncols3 = build_sheet(ws3, df_trans, dark3, merge_cols=[0, 1], hide_cols=[12, 13, 14, 15, 16, 17, 19])
+                nrows3, ncols3 = build_sheet(
+                    ws3, df_trans, dark2,
+                    merge_cols=[0, 1],
+                    fixed_width_cols=['基础信息'],
+                    fixed_width=26,
+                    min_w=6, max_w=22,
+                    hide_cols=[12, 13, 14, 15, 16, 17, 19]
+                )
 
                 apply_common_conditionals(ws3, nrows3, [
                     (1, 'bold'),
@@ -571,8 +609,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_fee.to_excel(writer, index=False, sheet_name=name4)
                 ws4 = writer.sheets[name4]
 
-                dark4 = dark2
-                nrows4, ncols4 = build_sheet(ws4, df_fee, dark4, merge_cols=[0, 1], hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
+                nrows4, ncols4 = build_sheet(
+                    ws4, df_fee, dark2,
+                    merge_cols=[0, 1],
+                    fixed_width_cols=['基础信息'],
+                    fixed_width=26,
+                    min_w=6, max_w=22,
+                    hide_cols=[11, 12, 13, 14, 15, 16, 17, 18]
+                )
 
                 apply_common_conditionals(ws4, nrows4, [
                     (1, 'bold'),
