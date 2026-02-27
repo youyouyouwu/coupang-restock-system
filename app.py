@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import io
+import zipfile
+from datetime import datetime
 
 # ==========================================
 # 1. 页面配置
@@ -107,6 +109,95 @@ def col_to_excel(col_idx: int) -> str:
         n, r = divmod(n - 1, 26)
         s = chr(65 + r) + s
     return s
+
+def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
+    """A4灰白可打印HTML，在线加载Noto字体；斑马纹按产品编码分组"""
+    df2 = df.copy()
+    for c in df2.columns:
+        df2[c] = df2[c].fillna('').astype(str)
+
+    # 分组斑马纹（按产品编码）
+    if '产品编码' in df2.columns and len(df2) > 0:
+        codes = df2['产品编码'].astype(str).fillna('')
+        gid = (codes.ne(codes.shift()).cumsum() % 2).astype(int)
+    else:
+        gid = pd.Series([0] * len(df2), dtype=int)
+
+    left_cols = set([c for c in df2.columns if c in ('基础信息', 'SKU名称')])
+
+    thead = "<thead><tr>" + "".join([f"<th>{col}</th>" for col in df2.columns]) + "</tr></thead>"
+    rows = []
+    for i in range(len(df2)):
+        zebra = "z1" if int(gid.iloc[i]) == 1 else "z0"
+        tds = []
+        for col in df2.columns:
+            cls = "td-left" if col in left_cols else "td-center"
+            tds.append(f'<td class="{cls}">{df2.iloc[i][col]}</td>')
+        rows.append(f'<tr class="{zebra}">' + "".join(tds) + "</tr>")
+    tbody = "<tbody>" + "".join(rows) + "</tbody>"
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    html = f"""<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&family=Noto+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
+  <title>{title}</title>
+  <style>
+    :root {{
+      --fg:#111; --muted:#555; --line:#d8d8d8; --head:#3f3f3f; --zebra:#f1f1f1; --white:#fff;
+    }}
+    html,body {{
+      margin:0; padding:0; background:var(--white); color:var(--fg);
+      font-family:"Noto Sans SC","Noto Sans KR",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    }}
+    .page {{ width:210mm; margin:0 auto; padding:14mm 12mm; box-sizing:border-box; }}
+    .header {{
+      display:flex; justify-content:space-between; align-items:flex-end;
+      border-bottom:2px solid var(--line); padding-bottom:10px; margin-bottom:12px; gap:12px;
+    }}
+    .title {{ font-size:18px; font-weight:600; margin:0; }}
+    .sub {{ margin:6px 0 0 0; font-size:12px; color:var(--muted); }}
+    .meta {{ font-size:12px; color:var(--muted); text-align:right; white-space:nowrap; }}
+    table {{ width:100%; border-collapse:collapse; font-size:11px; }}
+    th {{
+      background:var(--head); color:#fff; padding:8px 6px; border:1px solid var(--line);
+      text-align:center; font-weight:600;
+    }}
+    td {{ border:1px solid var(--line); padding:6px 6px; vertical-align:middle; word-break:break-word; }}
+    .td-center {{ text-align:center; }}
+    .td-left {{ text-align:left; }}
+    tr.z1 td {{ background:var(--zebra); }}
+    @media print {{
+      thead {{ display:table-header-group; }}
+      tr {{ page-break-inside:avoid; }}
+      .page {{ padding:10mm 10mm; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1 class="title">{title}</h1>
+        <div class="sub">{subtitle}</div>
+      </div>
+      <div class="meta">
+        生成日期：{today}<br/>
+        打印：A4 / 黑白灰
+      </div>
+    </div>
+    <table>{thead}{tbody}</table>
+  </div>
+</body>
+</html>
+"""
+    return html.encode("utf-8")
 
 # ==========================================
 # 4. 侧边栏
@@ -290,24 +381,29 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
-            # --- H. 搜索与看板（略，保持你原样） ---
+            # --- H. 搜索与看板（保持你原样：普通预览） ---
             if search_key:
                 df_display = df_sheet1[df_sheet1['产品编码'].astype(str).str.contains(search_key, case=False, na=False)].copy()
             else:
                 df_display = df_sheet1.copy()
-
             st.dataframe(df_display, use_container_width=True, height=600, hide_index=True)
 
             # ==========================================
-            # Excel 导出（Table + 按产品编码分组斑马纹）
+            # Excel 导出（Table + 按产品编码分组斑马纹 + 两列左对齐）
             # ==========================================
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
+                # 基础格式
                 fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
-                fmt_zebra_group = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
+                fmt_left = wb.add_format({'align': 'left', 'valign': 'vcenter'})
 
+                # 斑马纹：整行（默认居中）+ 左对齐版本（用于“基础信息/SKU名称”）
+                fmt_zebra_group = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
+                fmt_zebra_left = wb.add_format({'bg_color': '#F2F2F2', 'align': 'left', 'valign': 'vcenter'})
+
+                # 条件高亮
                 fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False, 'align': 'center', 'valign': 'vcenter'})
                 fmt_orange_bold = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
@@ -354,8 +450,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     hide_cols = hide_cols or []
                     fixed_width_cols = fixed_width_cols or []
 
-                    # ① 先用原始“产品编码”生成分组 gid（0/1）——不能用置空后的版本
-                    gid = None
+                    # ① 用原始“产品编码”生成分组 gid（0/1）——不能用置空后的版本
                     if '产品编码' in df_curr.columns and len(df_curr) > 0:
                         codes = df_curr['产品编码'].astype(str).fillna('')
                         gid = (codes.ne(codes.shift()).cumsum() % 2).astype(int)
@@ -372,20 +467,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
                     nrows, ncols = len(df_write), len(df_write.columns)
 
-                    # ③ Table：关掉 banded_rows（我们用“按组斑马纹”替代）
+                    # ③ Table：关闭自带banded_rows（我们用“按组斑马纹”替代）
                     columns = [{'header': c} for c in df_write.columns]
-                    if nrows > 0:
-                        ws.add_table(0, 0, nrows, ncols - 1, {
+                    if ncols > 0:
+                        last_row = nrows if nrows > 0 else 0  # 包含表头行
+                        ws.add_table(0, 0, last_row, ncols - 1, {
                             'columns': columns,
                             'style': 'Table Style Medium 9',
-                            'autofilter': True,
-                            'banded_rows': False
-                        })
-                    else:
-                        ws.add_table(0, 0, 0, ncols - 1, {
-                            'columns': columns,
-                            'style': 'Table Style Medium 9',
-                            'autofilter': False,
+                            'autofilter': True if nrows > 0 else False,
                             'banded_rows': False
                         })
 
@@ -393,6 +482,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     widths = estimate_col_widths(df_write, fixed_col_names=fixed_width_cols, fixed_width=fixed_width)
                     for i, w in enumerate(widths):
                         ws.set_column(i, i, w, fmt_center)
+
+                    # ✅ 两列内容左对齐（表头不变）
+                    for colname in ['基础信息', 'SKU名称']:
+                        if colname in df_write.columns:
+                            cidx = list(df_write.columns).index(colname)
+                            ws.set_column(cidx, cidx, widths[cidx], fmt_left)
 
                     # ⑤ 写隐藏辅助列 _gid（放在表格右侧，避免进入Table）
                     helper_col = ncols
@@ -404,13 +499,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     # ⑥ 按 gid 做“按产品编码分组的斑马纹”
                     if nrows > 0 and ncols > 0:
                         helper_letter = col_to_excel(helper_col)
-                        # 注意：条件格式公式写第一行（Excel行号从2开始）
                         formula = f'=${helper_letter}2=1'
+                        # 整行斑马（默认）
                         ws.conditional_format(1, 0, nrows, ncols - 1, {
                             'type': 'formula',
                             'criteria': formula,
                             'format': fmt_zebra_group
                         })
+                        # ✅ 两列斑马下也保持左对齐
+                        for colname in ['基础信息', 'SKU名称']:
+                            if colname in df_write.columns:
+                                cidx = list(df_write.columns).index(colname)
+                                ws.conditional_format(1, cidx, nrows, cidx, {
+                                    'type': 'formula',
+                                    'criteria': formula,
+                                    'format': fmt_zebra_left
+                                })
 
                     # ⑦ 隐藏列（你之前的逻辑）
                     for c in hide_cols:
@@ -438,12 +542,33 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 build_table_sheet('库龄预警单(需重入库)', df_fee, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
 
+            excel_bytes = out_io.getvalue()
+
+            # ==========================================
+            # ✅ ZIP打包：Excel + 3个HTML工单
+            # ==========================================
+            stamp = pd.Timestamp.now().strftime('%Y%m%d')
+            excel_name = f"Coupang_Restock_Full_v18_{stamp}.xlsx"
+
+            # HTML用原始df_buy/df_trans/df_fee（不做置空，便于工单识别）
+            html_buy = make_work_order_html(df_buy, "采购工单（找工厂）", "范围：建议采购数 > 0")
+            html_trans = make_work_order_html(df_trans, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
+            html_fee = make_work_order_html(df_fee, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
+
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr(excel_name, excel_bytes)
+                z.writestr(f"WorkOrder_Buy_{stamp}.html", html_buy)
+                z.writestr(f"WorkOrder_Transfer_{stamp}.html", html_trans)
+                z.writestr(f"WorkOrder_Fee_{stamp}.html", html_fee)
+
             st.download_button(
-                "📥 下载最终 Excel (包含全量数据)",
-                data=out_io.getvalue(),
-                file_name=f"Coupang_Restock_Full_v18_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.ms-excel",
-                type="primary"
+                "📦 下载压缩包（Excel + 3个工单HTML）",
+                data=zip_buf.getvalue(),
+                file_name=f"Coupang_Restock_Pack_{stamp}.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True
             )
 else:
     st.info("👈 请在左侧上传文件")
