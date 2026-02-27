@@ -142,35 +142,24 @@ def _fmt_num(x):
     try:
         if pd.isna(x):
             return ""
-        # 尽量把 10.0 -> 10
         f = float(x)
         if abs(f - int(f)) < 1e-9:
             return str(int(f))
-        # 保留1位小数够用（仓储费可能带小数）
         return f"{f:.1f}"
     except:
         s = str(x)
         return "" if s.lower() == "nan" else s
 
 def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> bytes:
-    """
-    - 全表统一字体：Google Fonts Noto Sans SC + KR
-    - A4 打印友好：灰白色调
-    - 斑马纹：按 产品编码 分组（同产品编码整段同色）
-    """
     df2 = df.copy()
-    # 统一转为字符串（保留显示一致）
     for c in df2.columns:
         df2[c] = df2[c].map(_fmt_num)
 
-    # zebra按产品编码分组
     codes = df2.get('产品编码', pd.Series([''] * len(df2))).astype(str).fillna('')
-    gid = (codes != codes.shift()).cumsum() % 2  # 0/1
+    gid = (codes != codes.shift()).cumsum() % 2
 
-    # 对齐：基础信息、SKU名称左对齐，其它默认居中
     left_cols = set([c for c in df2.columns if c in ('基础信息', 'SKU名称')])
 
-    # 组装表格HTML（手写tr，方便给row加class）
     thead = "<thead><tr>" + "".join([f"<th>{col}</th>" for col in df2.columns]) + "</tr></thead>"
     rows_html = []
     for i in range(len(df2)):
@@ -191,7 +180,6 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> by
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- ✅ 在线字体：全表统一字体 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&family=Noto+Sans+KR:wght@400;600&display=swap" rel="stylesheet">
@@ -284,7 +272,6 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> by
       background: var(--zebra);
     }}
 
-    /* 打印：表头重复、避免行被截断 */
     @media print {{
       .page {{ padding: 10mm 10mm; }}
       thead {{ display: table-header-group; }}
@@ -316,7 +303,6 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> by
 </html>
 """
     return html.encode("utf-8")
-
 
 # ==========================================
 # 6. 主逻辑
@@ -396,7 +382,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Storage_Fee'] = df_final['Storage_Fee'].fillna(0)
 
             df_final['Total_Stock'] = df_final['Stock_Orange'] + df_final['Stock_Jifeng']
-
             df_final['Safety_Calc'] = df_final['Sales_7d'] * safety_weeks
 
             def apply_safety_floor(row):
@@ -408,7 +393,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 return base_val
 
             df_final['Safety'] = df_final.apply(apply_safety_floor, axis=1)
-
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
 
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
@@ -507,8 +491,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             def highlight_zebra(row):
                 try:
-                    gid = zebra_group_ids.loc[row.name]
-                    if gid == 1:
+                    gidv = zebra_group_ids.loc[row.name]
+                    if gidv == 1:
                         return ['background-color: #f7f7f7'] * len(row)
                 except:
                     pass
@@ -562,27 +546,23 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     '本月仓储费(预警)': '{:,.0f}',
                 })
             )
-
             st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
             # ==========================================
-            # Excel 导出（你原版保持） + HTML 工单（新增）
+            # Excel 导出（保持原逻辑） + HTML 工单（新增）
             # ==========================================
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
-                # --- 统一居中格式（列默认）---
                 fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
-                fmt_left = wb.add_format({'align': 'left', 'valign': 'vcenter'})  # ✅ 基础信息、SKU左对齐用
+                fmt_left = wb.add_format({'align': 'left', 'valign': 'vcenter'})
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
-                # 斑马纹（仅作用于有效列范围）
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
                 fmt_zebra_left = wb.add_format({'bg_color': '#F2F2F2', 'align': 'left', 'valign': 'vcenter'})
 
-                # 条件高亮（全部加居中）
                 fmt_bold_col = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False, 'align': 'center', 'valign': 'vcenter'})
@@ -591,7 +571,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
 
-                # 合并用格式（也居中）；以及合并+斑马背景
                 fmt_merge = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                 fmt_merge_zebra = wb.add_format({'align': 'center', 'valign': 'vcenter', 'bg_color': '#F2F2F2'})
 
@@ -611,23 +590,21 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ws.set_column(i, i, w, fmt_center)
 
                 def set_left_columns(ws, df_curr):
-                    # ✅ 基础信息 / SKU名称 左对齐（表头不变）
                     for col_name in ['基础信息', 'SKU名称']:
                         if col_name in df_curr.columns:
                             idx = list(df_curr.columns).index(col_name)
-                            # 只设列格式（宽度不改），覆盖默认居中
                             ws.set_column(idx, idx, None, fmt_left)
 
-                def add_zebra_conditional(ws, nrows, ncols, helper_col_idx):
+                # ✅ 修复点：把 df_curr 传进来
+                def add_zebra_conditional(ws, nrows, ncols, helper_col_idx, df_curr):
                     if nrows <= 0 or ncols <= 0:
                         return
                     helper_col_letter = col_to_excel(helper_col_idx)
                     formula = f'=${helper_col_letter}2=1'
-                    # zebra仅覆盖有效列
+
                     ws.conditional_format(1, 0, nrows, ncols - 1, {'type': 'formula', 'criteria': formula, 'format': fmt_zebra})
 
-                    # ✅ zebra下的“基础信息/SKU名称”左对齐（额外覆盖）
-                    # 用相同公式对这两列单独上一个 left zebra
+                    # zebra下“基础信息/SKU名称”左对齐覆盖
                     for col_name in ['基础信息', 'SKU名称']:
                         if col_name in df_curr.columns:
                             cidx = list(df_curr.columns).index(col_name)
@@ -685,7 +662,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     apply_width_and_center(ws, widths)
                     write_headers(ws, headers, dark_headers_map)
 
-                    # zebra_id 辅助列（隐藏）
                     gid = get_group_ids(df_curr) if nrows > 0 else pd.Series(dtype=int)
                     helper_col_idx = ncols
                     ws.write(0, helper_col_idx, '_zebra', fmt_header)
@@ -693,29 +669,24 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ws.write(i + 1, helper_col_idx, int(gid.iloc[i]), fmt_center)
                     ws.set_column(helper_col_idx, helper_col_idx, None, None, {'hidden': True})
 
-                    add_zebra_conditional(ws, nrows, ncols, helper_col_idx)
+                    # ✅ 修复点：传 df_curr
+                    add_zebra_conditional(ws, nrows, ncols, helper_col_idx, df_curr)
 
-                    # ✅ 左对齐列
                     set_left_columns(ws, df_curr)
 
-                    # 合并视觉列
                     if nrows > 0 and merge_cols:
                         merge_visual_columns(ws, df_curr, merge_cols, gid)
 
-                    # 隐藏列
                     for c in hide_cols:
                         if 0 <= c < ncols:
                             ws.set_column(c, c, None, None, {'hidden': True})
 
                     return nrows, ncols
 
-                # =========================
-                # Sheet1：补货计算表（含在做列）
-                # =========================
+                # Sheet1
                 name1 = '补货计算表'
                 df_sheet1.to_excel(writer, index=False, sheet_name=name1)
                 ws1 = writer.sheets[name1]
-
                 dark1 = {2: '产品编码', 4: 'SKU名称', 13: '建议采购数', 16: '冗余数量', 19: '建议调拨数量', 20: '本月仓储费(预警)'}
                 nrows1, _ = build_sheet(
                     ws1, df_sheet1, dark1,
@@ -724,26 +695,18 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     fixed_width=26,
                     min_w=6, max_w=22
                 )
-
                 apply_common_conditionals(ws1, nrows1, [
-                    (2, 'bold'),
-                    (4, 'bold'),
-                    (13, 'red_bold'),
-                    (14, 'red_norm'),
-                    (16, 'orange_bold'),
-                    (17, 'orange_norm'),
-                    (19, 'blue'),
-                    (20, 'purple'),
+                    (2, 'bold'), (4, 'bold'),
+                    (13, 'red_bold'), (14, 'red_norm'),
+                    (16, 'orange_bold'), (17, 'orange_norm'),
+                    (19, 'blue'), (20, 'purple'),
                 ])
 
-                # =========================
-                # Sheet2：采购单(找工厂)
-                # =========================
+                # Sheet2
                 df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
                 name2 = '采购单(找工厂)'
                 df_buy.to_excel(writer, index=False, sheet_name=name2)
                 ws2 = writer.sheets[name2]
-
                 dark2 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
                 nrows2, _ = build_sheet(
                     ws2, df_buy, dark2,
@@ -753,26 +716,18 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     min_w=6, max_w=22,
                     hide_cols=[14, 15, 16, 17, 18, 19]
                 )
-
                 apply_common_conditionals(ws2, nrows2, [
-                    (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (1, 'bold'), (3, 'bold'),
+                    (12, 'red_bold'), (13, 'red_norm'),
+                    (15, 'orange_bold'), (16, 'orange_norm'),
+                    (18, 'blue'), (19, 'purple'),
                 ])
 
-                # =========================
-                # Sheet3：调拨单(发橙火)
-                # =========================
+                # Sheet3
                 df_trans = df_out_base[df_out_base['建议调拨数量'] > 0].copy()
                 name3 = '调拨单(发橙火)'
                 df_trans.to_excel(writer, index=False, sheet_name=name3)
                 ws3 = writer.sheets[name3]
-
                 nrows3, _ = build_sheet(
                     ws3, df_trans, dark2,
                     merge_cols=[0, 1],
@@ -781,26 +736,18 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     min_w=6, max_w=22,
                     hide_cols=[12, 13, 14, 15, 16, 17, 19]
                 )
-
                 apply_common_conditionals(ws3, nrows3, [
-                    (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (1, 'bold'), (3, 'bold'),
+                    (12, 'red_bold'), (13, 'red_norm'),
+                    (15, 'orange_bold'), (16, 'orange_norm'),
+                    (18, 'blue'), (19, 'purple'),
                 ])
 
-                # =========================
-                # Sheet4：库龄预警单(需重入库)
-                # =========================
+                # Sheet4
                 df_fee = df_out_base[df_out_base['本月仓储费(预警)'] > 0].copy()
                 name4 = '库龄预警单(需重入库)'
                 df_fee.to_excel(writer, index=False, sheet_name=name4)
                 ws4 = writer.sheets[name4]
-
                 nrows4, _ = build_sheet(
                     ws4, df_fee, dark2,
                     merge_cols=[0, 1],
@@ -809,71 +756,37 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     min_w=6, max_w=22,
                     hide_cols=[11, 12, 13, 14, 15, 16, 17, 18]
                 )
-
                 apply_common_conditionals(ws4, nrows4, [
-                    (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (1, 'bold'), (3, 'bold'),
+                    (12, 'red_bold'), (13, 'red_norm'),
+                    (15, 'orange_bold'), (16, 'orange_norm'),
+                    (18, 'blue'), (19, 'purple'),
                 ])
 
-            # =========================
-            # ✅ HTML 工单导出（新增，替代PDF）
-            # =========================
+            # HTML 工单下载
             st.divider()
             st.subheader("🧾 工单下载（HTML / A4打印 / Noto在线字体）")
-            st.caption("打开HTML后直接 Ctrl+P 打印（建议：边距默认、缩放适配页面）。需要联网加载 Google Fonts。")
+            st.caption("打开HTML后 Ctrl+P 打印（需要联网加载 Google Fonts）。")
 
-            # 工单内容用“sheet2/3/4的数据”（df_buy/df_trans/df_fee）
-            html_buy = make_work_order_html(
-                df_buy,
-                title="采购工单（找工厂）",
-                subtitle="范围：建议采购数 > 0"
-            )
-            html_trans = make_work_order_html(
-                df_trans,
-                title="调拨工单（发橙火）",
-                subtitle="范围：建议调拨数量 > 0"
-            )
-            html_fee = make_work_order_html(
-                df_fee,
-                title="库龄预警工单（需重入库）",
-                subtitle="范围：本月仓储费(预警) > 0"
-            )
+            html_buy = make_work_order_html(df_buy, "采购工单（找工厂）", "范围：建议采购数 > 0")
+            html_trans = make_work_order_html(df_trans, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
+            html_fee = make_work_order_html(df_fee, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.download_button(
-                    "⬇️ 下载：采购工单.html",
-                    data=html_buy,
-                    file_name=f"WorkOrder_Buy_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
+                st.download_button("⬇️ 下载：采购工单.html", data=html_buy,
+                                   file_name=f"WorkOrder_Buy_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
+                                   mime="text/html", use_container_width=True)
             with c2:
-                st.download_button(
-                    "⬇️ 下载：调拨工单.html",
-                    data=html_trans,
-                    file_name=f"WorkOrder_Transfer_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
+                st.download_button("⬇️ 下载：调拨工单.html", data=html_trans,
+                                   file_name=f"WorkOrder_Transfer_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
+                                   mime="text/html", use_container_width=True)
             with c3:
-                st.download_button(
-                    "⬇️ 下载：库龄预警工单.html",
-                    data=html_fee,
-                    file_name=f"WorkOrder_Fee_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
+                st.download_button("⬇️ 下载：库龄预警工单.html", data=html_fee,
+                                   file_name=f"WorkOrder_Fee_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
+                                   mime="text/html", use_container_width=True)
 
-            # =========================
-            # ✅ Excel 下载按钮（保持原逻辑）
-            # =========================
+            # Excel 下载
             st.download_button(
                 "📥 下载最终 Excel (包含全量数据)",
                 data=out_io.getvalue(),
