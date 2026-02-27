@@ -267,8 +267,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             else:
                 df_display = df_sheet1.copy()
 
-            # ✅ 视觉“合并单元格”：只对【店铺名称】与【产品编码】按“品(产品编码)”做显示合并
-            # 在做(Y) 维度是SKU级，不做合并
+            # ✅ 视觉“合并单元格”：Streamlit 显示仅对【店铺名称】与【产品编码】按产品编码分组做显示合并
             first_in_group = df_display['产品编码'].ne(df_display['产品编码'].shift())
             df_display_vis = df_display.copy()
             for col in ['店铺名称', '产品编码']:
@@ -362,12 +361,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
             # ==========================================
-            # Excel 导出
+            # Excel 导出（全Sheet视觉优化）
             # ==========================================
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
+                # --- 格式 ---
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1})
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1})
 
@@ -381,118 +381,212 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
 
-                # ✅ 合并用格式：需要两套（普通/斑马纹），保证合并后斑马纹前后统一
+                # 合并用格式：普通/斑马
                 fmt_merge = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                 fmt_merge_zebra = wb.add_format({'align': 'center', 'valign': 'vcenter', 'bg_color': '#F2F2F2'})
 
-                # --- 封装格式化函数（原结构：20列 A:T）---
-                def format_sheet(ws, df_curr, hide_cols=[]):
-                    # 斑马纹（按产品编码分组）
-                    curr_zebra_ids = (df_curr['产品编码'] != df_curr['产品编码'].shift()).cumsum() % 2
-                    for i, gid in enumerate(curr_zebra_ids):
+                # --- 工具：按产品编码分组计算斑马id ---
+                def get_group_ids(df_curr):
+                    codes = df_curr['产品编码'].astype(str).fillna('')
+                    return (codes != codes.shift()).cumsum() % 2
+
+                # --- 工具：裁切“有效列范围”，防止右侧无数据区域也被设成蓝色/斑马 ---
+                def fit_used_range(ws, ncols, nrows, default_width=13):
+                    # 只设置用到的列宽，避免 A:T 这种整段设置导致右侧空白区域也有样式感
+                    if ncols <= 0:
+                        return
+                    ws.set_column(0, ncols - 1, default_width)
+                    # 右侧列不做任何 set_column
+
+                # --- 工具：合并可视化列（店铺名称、产品编码），可指定哪些列合并 ---
+                def merge_visual_columns(ws, df_curr, col_indices_to_merge):
+                    codes = df_curr['产品编码'].astype(str).fillna('')
+                    group_ids = get_group_ids(df_curr)
+                    start = 0
+                    for i in range(1, len(codes) + 1):
+                        is_break = (i == len(codes)) or (codes.iloc[i] != codes.iloc[i - 1])
+                        if is_break:
+                            end = i - 1
+                            if end > start:
+                                gid = int(group_ids.iloc[start])
+                                merge_fmt = fmt_merge_zebra if gid == 1 else fmt_merge
+                                r1 = start + 1
+                                r2 = end + 1
+                                for c_idx in col_indices_to_merge:
+                                    ws.merge_range(r1, c_idx, r2, c_idx, df_curr.iloc[start, c_idx], merge_fmt)
+                            start = i
+
+                # --- 工具：在“用到的列范围内”做斑马纹（按产品编码分组）---
+                def apply_zebra_rows(ws, df_curr, ncols):
+                    group_ids = get_group_ids(df_curr)
+                    for i, gid in enumerate(group_ids):
                         if gid == 1:
                             ws.set_row(i + 1, None, fmt_zebra)
 
-                    # 表头
+                # --- 工具：写表头、加深指定列头（都限制在有效列范围内）---
+                def write_headers(ws, headers, dark_map):
                     ws.set_row(0, None, fmt_header)
-                    target_headers = {
-                        1: '产品编码',
-                        3: 'SKU名称',
-                        12: '建议采购数',
-                        15: '冗余数量',
-                        18: '建议调拨数量',
-                        19: '本月仓储费(预警)'
-                    }
-                    for col_idx, text in target_headers.items():
-                        ws.write(0, col_idx, text, fmt_header_dark)
-                    ws.set_column('A:T', 13)
+                    for col_idx, text in enumerate(headers):
+                        ws.write(0, col_idx, text, fmt_header)
+                    for col_idx, text in dark_map.items():
+                        if 0 <= col_idx < len(headers):
+                            ws.write(0, col_idx, text, fmt_header_dark)
 
-                    # 隐藏列
-                    for c_idx in hide_cols:
-                        ws.set_column(c_idx, c_idx, None, None, {'hidden': True})
-
-                    # 条件格式
+                # --- 工具：条件格式（限制在有效列范围内）---
+                def apply_conditional(ws, df_curr, schema):
+                    # schema: list of dict {col, type, ...}
                     nrows = len(df_curr)
-                    ws.conditional_format(1, 1, nrows, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                    ws.conditional_format(1, 3, nrows, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                    ws.conditional_format(1, 12, nrows, 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
-                    ws.conditional_format(1, 13, nrows, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
-                    ws.conditional_format(1, 15, nrows, 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
-                    ws.conditional_format(1, 16, nrows, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
-                    ws.conditional_format(1, 18, nrows, 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
-                    ws.conditional_format(1, 19, nrows, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+                    for rule in schema:
+                        ws.conditional_format(1, rule['col'], nrows, rule['col'], rule['fmt'])
 
-                # --- Sheet1 专用格式化（新增1列：在做(Y)，总21列 A:U）---
-                def format_sheet_with_active(ws, df_curr):
-                    curr_zebra_ids = (df_curr['产品编码'] != df_curr['产品编码'].shift()).cumsum() % 2
-                    for i, gid in enumerate(curr_zebra_ids):
-                        if gid == 1:
-                            ws.set_row(i + 1, None, fmt_zebra)
+                # =========================
+                # Sheet1：补货计算表（含在做列）
+                # =========================
+                sheet1_name = '补货计算表'
+                df_sheet1.to_excel(writer, index=False, sheet_name=sheet1_name)
+                ws1 = writer.sheets[sheet1_name]
 
-                    ws.set_row(0, None, fmt_header)
-                    target_headers = {
-                        2: '产品编码',
-                        4: 'SKU名称',
-                        13: '建议采购数',
-                        16: '冗余数量',
-                        19: '建议调拨数量',
-                        20: '本月仓储费(预警)'
-                    }
-                    for col_idx, text in target_headers.items():
-                        ws.write(0, col_idx, text, fmt_header_dark)
-                    ws.set_column('A:U', 13)
+                headers1 = list(df_sheet1.columns)
+                ncols1 = len(headers1)
+                nrows1 = len(df_sheet1)
 
-                    nrows = len(df_curr)
-                    ws.conditional_format(1, 2, nrows, 2, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                    ws.conditional_format(1, 4, nrows, 4, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
-                    ws.conditional_format(1, 13, nrows, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
-                    ws.conditional_format(1, 14, nrows, 14, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
-                    ws.conditional_format(1, 16, nrows, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
-                    ws.conditional_format(1, 17, nrows, 17, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
-                    ws.conditional_format(1, 19, nrows, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
-                    ws.conditional_format(1, 20, nrows, 20, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+                fit_used_range(ws1, ncols1, nrows1, default_width=13)
+                apply_zebra_rows(ws1, df_sheet1, ncols1)
 
-                # --- Sheet1: 补货计算表（含在做列） ---
-                df_sheet1.to_excel(writer, index=False, sheet_name='补货计算表')
-                ws1 = writer.sheets['补货计算表']
-                format_sheet_with_active(ws1, df_sheet1)
+                # 深色表头列（根据你的列结构：0店铺 1在做 2产品编码 4SKU名称 13建议采购数 16冗余数量 19建议调拨数量 20仓储费）
+                dark1 = {
+                    2: '产品编码',
+                    4: 'SKU名称',
+                    13: '建议采购数',
+                    16: '冗余数量',
+                    19: '建议调拨数量',
+                    20: '本月仓储费(预警)'
+                }
+                write_headers(ws1, headers1, dark1)
 
-                # ✅ Excel 视觉合并：按“产品编码”连续块合并【店铺名称(A列)】与【产品编码(C列)】
-                # 不合并 在做(Y)（B列），保持SKU维度独立显示
-                codes = df_sheet1['产品编码'].astype(str).fillna('')
-                group_ids = (codes != codes.shift()).cumsum() % 2  # 与斑马纹逻辑一致
-                start = 0
-                for i in range(1, len(codes) + 1):
-                    is_break = (i == len(codes)) or (codes.iloc[i] != codes.iloc[i - 1])
-                    if is_break:
-                        end = i - 1
-                        if end > start:
-                            # 选用与该组斑马一致的合并格式（解决“合并后斑马纹不统一”）
-                            gid = int(group_ids.iloc[start])
-                            merge_fmt = fmt_merge_zebra if gid == 1 else fmt_merge
+                # 条件格式（按列索引，限制在有效列）
+                n1 = nrows1
+                if n1 > 0:
+                    ws1.conditional_format(1, 2, n1, 2, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws1.conditional_format(1, 4, n1, 4, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws1.conditional_format(1, 13, n1, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                    ws1.conditional_format(1, 14, n1, 14, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                    ws1.conditional_format(1, 16, n1, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                    ws1.conditional_format(1, 17, n1, 17, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                    ws1.conditional_format(1, 19, n1, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                    ws1.conditional_format(1, 20, n1, 20, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
-                            r1 = start + 1  # +1 跳过表头
-                            r2 = end + 1
-                            # A列=0 店铺名称
-                            ws1.merge_range(r1, 0, r2, 0, df_sheet1.iloc[start, 0], merge_fmt)
-                            # C列=2 产品编码
-                            ws1.merge_range(r1, 2, r2, 2, df_sheet1.iloc[start, 2], merge_fmt)
-                        start = i
+                # Sheet1 合并：店铺名称(A=0) + 产品编码(C=2)，不合并在做(B=1)
+                merge_visual_columns(ws1, df_sheet1, col_indices_to_merge=[0, 2])
 
-                # --- Sheet2: 采购单（不合并，保持原样） ---
+                # =========================
+                # Sheet2：采购单（视觉合并 + 只在有效列范围内设置样式）
+                # =========================
                 df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
-                df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
-                format_sheet(writer.sheets['采购单(找工厂)'], df_buy, hide_cols=[14, 15, 16, 17, 18, 19])
+                sheet2_name = '采购单(找工厂)'
+                df_buy.to_excel(writer, index=False, sheet_name=sheet2_name)
+                ws2 = writer.sheets[sheet2_name]
 
-                # --- Sheet3: 调拨单（不改） ---
+                headers2 = list(df_buy.columns)
+                ncols2 = len(headers2)
+                nrows2 = len(df_buy)
+
+                fit_used_range(ws2, ncols2, nrows2, default_width=13)
+                apply_zebra_rows(ws2, df_buy, ncols2)
+
+                # 深色列头（采购单是原20列：1产品编码 3SKU名称 12建议采购数 15冗余数量 18建议调拨数量 19仓储费）
+                dark2 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
+                write_headers(ws2, headers2, dark2)
+
+                if nrows2 > 0:
+                    ws2.conditional_format(1, 1, nrows2, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws2.conditional_format(1, 3, nrows2, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws2.conditional_format(1, 12, nrows2, 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                    ws2.conditional_format(1, 13, nrows2, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                    ws2.conditional_format(1, 15, nrows2, 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                    ws2.conditional_format(1, 16, nrows2, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                    ws2.conditional_format(1, 18, nrows2, 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                    ws2.conditional_format(1, 19, nrows2, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+
+                # 合并：店铺名称(A=0) + 产品编码(B=1)（采购单无在做列）
+                if not df_buy.empty:
+                    merge_visual_columns(ws2, df_buy, col_indices_to_merge=[0, 1])
+
+                # 隐藏列（仅隐藏有效列范围内，避免右侧被误设）
+                # 原逻辑：隐藏O-T => 14-19
+                for c_idx in [14, 15, 16, 17, 18, 19]:
+                    if c_idx < ncols2:
+                        ws2.set_column(c_idx, c_idx, None, None, {'hidden': True})
+
+                # =========================
+                # Sheet3：调拨单（视觉合并 + 有效列样式）
+                # =========================
                 df_trans = df_out_base[df_out_base['建议调拨数量'] > 0].copy()
-                df_trans.to_excel(writer, index=False, sheet_name='调拨单(发橙火)')
-                format_sheet(writer.sheets['调拨单(发橙火)'], df_trans, hide_cols=[12, 13, 14, 15, 16, 17, 19])
+                sheet3_name = '调拨单(发橙火)'
+                df_trans.to_excel(writer, index=False, sheet_name=sheet3_name)
+                ws3 = writer.sheets[sheet3_name]
 
-                # --- Sheet4: 预警单（不改） ---
+                headers3 = list(df_trans.columns)
+                ncols3 = len(headers3)
+                nrows3 = len(df_trans)
+
+                fit_used_range(ws3, ncols3, nrows3, default_width=13)
+                apply_zebra_rows(ws3, df_trans, ncols3)
+                dark3 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
+                write_headers(ws3, headers3, dark3)
+
+                if nrows3 > 0:
+                    ws3.conditional_format(1, 1, nrows3, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws3.conditional_format(1, 3, nrows3, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws3.conditional_format(1, 12, nrows3, 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                    ws3.conditional_format(1, 13, nrows3, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                    ws3.conditional_format(1, 15, nrows3, 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                    ws3.conditional_format(1, 16, nrows3, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                    ws3.conditional_format(1, 18, nrows3, 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                    ws3.conditional_format(1, 19, nrows3, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+
+                if not df_trans.empty:
+                    merge_visual_columns(ws3, df_trans, col_indices_to_merge=[0, 1])
+
+                # 原逻辑：隐藏 M-R 和 T => 12-17, 19
+                for c_idx in [12, 13, 14, 15, 16, 17, 19]:
+                    if c_idx < ncols3:
+                        ws3.set_column(c_idx, c_idx, None, None, {'hidden': True})
+
+                # =========================
+                # Sheet4：预警单（视觉合并 + 有效列样式）
+                # =========================
                 df_fee = df_out_base[df_out_base['本月仓储费(预警)'] > 0].copy()
-                df_fee.to_excel(writer, index=False, sheet_name='库龄预警单(需重入库)')
-                format_sheet(writer.sheets['库龄预警单(需重入库)'], df_fee, hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
+                sheet4_name = '库龄预警单(需重入库)'
+                df_fee.to_excel(writer, index=False, sheet_name=sheet4_name)
+                ws4 = writer.sheets[sheet4_name]
+
+                headers4 = list(df_fee.columns)
+                ncols4 = len(headers4)
+                nrows4 = len(df_fee)
+
+                fit_used_range(ws4, ncols4, nrows4, default_width=13)
+                apply_zebra_rows(ws4, df_fee, ncols4)
+                dark4 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
+                write_headers(ws4, headers4, dark4)
+
+                if nrows4 > 0:
+                    ws4.conditional_format(1, 1, nrows4, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws4.conditional_format(1, 3, nrows4, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
+                    ws4.conditional_format(1, 12, nrows4, 12, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_bold})
+                    ws4.conditional_format(1, 13, nrows4, 13, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_red_norm})
+                    ws4.conditional_format(1, 15, nrows4, 15, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_bold})
+                    ws4.conditional_format(1, 16, nrows4, 16, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_orange_norm})
+                    ws4.conditional_format(1, 18, nrows4, 18, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
+                    ws4.conditional_format(1, 19, nrows4, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
+
+                if not df_fee.empty:
+                    merge_visual_columns(ws4, df_fee, col_indices_to_merge=[0, 1])
+
+                # 原逻辑：隐藏 L-S => 11-18
+                for c_idx in [11, 12, 13, 14, 15, 16, 17, 18]:
+                    if c_idx < ncols4:
+                        ws4.set_column(c_idx, c_idx, None, None, {'hidden': True})
 
             st.download_button(
                 "📥 下载最终 Excel (包含全量数据)",
