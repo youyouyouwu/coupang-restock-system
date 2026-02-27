@@ -12,7 +12,7 @@ st.markdown("### 核心逻辑：分表极简展示 + 统一视觉标准")
 # ==========================================
 # 2. 列号配置 (请确认 Excel 实际位置)
 # ==========================================
-# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12, N=13 ... R=17
+# A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... M=12, N=13, O=14 ... R=17
 
 # --- 1. 基础信息表 (Master) ---
 IDX_M_CODE    = 0    # A列: 产品编码
@@ -23,6 +23,7 @@ IDX_M_COST    = 6    # G列: 采购单价
 IDX_M_ORANGE  = 3    # D列: 橙火ID
 IDX_M_INBOUND = 12   # M列: 入库码
 IDX_M_ACTIVE  = 13   # N列: 是否在做 (有Y=在做，大小写容错)
+IDX_M_IMG     = 14   # O列: WPS DISPIMG 函数（原样保留）
 
 # --- 2. 销售表 (近7天) ---
 IDX_7D_SKU    = 0    # A列: SKU/ID
@@ -120,6 +121,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             try:
                 df_base['Shop'] = clean_str(df_m.iloc[:, IDX_M_SHOP])
                 df_base['Code'] = clean_match_key(df_m.iloc[:, IDX_M_CODE])
+                df_base['Img_Func'] = clean_str(df_m.iloc[:, IDX_M_IMG])  # ✅ O列原样保留（去nan/去首尾空格）
                 df_base['Info_E'] = clean_str(df_m.iloc[:, IDX_M_COL_E])
                 df_base['Info_F'] = clean_str(df_m.iloc[:, IDX_M_COL_F])
                 df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST])
@@ -175,7 +177,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
-            # --- F. 计算逻辑 ---
+            # --- F. 计算逻辑（不改动） ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
@@ -219,7 +221,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             # --- G. 整理输出 ---
             cols_export_base = [
-                'Shop', 'Code', 'Info_E', 'Info_F', 'Cost', 'Orange_ID', 'Inbound_Code',
+                'Shop', 'Code', 'Img_Func', 'Info_E', 'Info_F', 'Cost', 'Orange_ID', 'Inbound_Code',
                 'Sales_7d', 'Stock_Orange', 'Stock_Jifeng', 'Total_Stock', 'Safety',
                 'Restock_Qty', 'Restock_Money', 'Redundancy_Std', 'Redundancy_Qty',
                 'Redundancy_Money', 'Orange_Safety_Std', 'Orange_Transfer_Qty', 'Storage_Fee'
@@ -229,6 +231,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             header_map_base = {
                 'Shop': '店铺名称',
                 'Code': '产品编码',
+                'Img_Func': '图片函数',
                 'Info_E': '基础信息',
                 'Info_F': 'SKU名称',
                 'Cost': '采购单价',
@@ -250,7 +253,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             }
             df_out_base.rename(columns=header_map_base, inplace=True)
 
-            # Sheet1/展示专用：插入“在做(Y)”列
+            # Sheet1/展示专用：插入“在做(Y)”列（SKU维度，不参与合并）
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
@@ -261,8 +264,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_display = df_sheet1.copy()
 
             first_in_group = df_display['产品编码'].ne(df_display['产品编码'].shift())
+
+            # ✅ 视觉去重：店铺名称/产品编码/图片函数 都按“品(产品编码)”只显示一次
             df_display_vis = df_display.copy()
-            for col in ['店铺名称', '产品编码']:
+            for col in ['店铺名称', '产品编码', '图片函数']:
                 df_display_vis.loc[~first_in_group, col] = ''
 
             zebra_group_ids = (df_display['产品编码'] != df_display['产品编码'].shift()).cumsum() % 2
@@ -362,28 +367,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     s = chr(65 + r) + s
                 return s
 
-            def estimate_col_widths(df: pd.DataFrame, fixed_col_names=None, fixed_width=24,
+            def estimate_col_widths(df: pd.DataFrame, fixed_width_map=None,
                                     min_w=6, max_w=22, header_pad=2, cell_pad=2):
                 """
                 用字符长度估算列宽（xlsxwriter不支持真正autofit）
-                - fixed_col_names: 这些列用固定宽（比如“基础信息”）
+                - fixed_width_map: {列名: 固定宽度}，例如 {'基础信息':26, '图片函数':20}
                 """
-                fixed_col_names = set(fixed_col_names or [])
+                fixed_width_map = fixed_width_map or {}
                 widths = []
                 for col in df.columns:
-                    if col in fixed_col_names:
-                        widths.append(fixed_width)
+                    if col in fixed_width_map:
+                        widths.append(int(fixed_width_map[col]))
                         continue
-                    # header长度
                     best = len(str(col)) + header_pad
-                    # 内容长度（抽样/全量都行，这里全量但很快）
-                    ser = df[col]
-                    # 防止NaN
-                    ser = ser.fillna('')
-                    # 转字符串
-                    lens = ser.astype(str).map(len)
-                    if len(lens) > 0:
-                        best = max(best, int(lens.max()) + cell_pad)
+                    ser = df[col].fillna('').astype(str)
+                    if len(ser) > 0:
+                        best = max(best, int(ser.map(len).max()) + cell_pad)
                     best = max(min_w, min(max_w, best))
                     widths.append(best)
                 return widths
@@ -392,15 +391,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
-                # --- 统一居中格式（列默认）---
                 fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                 fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                 fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-
-                # 斑马纹（仅作用于有效列范围）
                 fmt_zebra = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
 
-                # 条件高亮（全部加居中）
                 fmt_bold_col = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False, 'align': 'center', 'valign': 'vcenter'})
@@ -409,7 +404,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
 
-                # 合并用格式（也居中）；以及合并+斑马背景
                 fmt_merge = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                 fmt_merge_zebra = wb.add_format({'align': 'center', 'valign': 'vcenter', 'bg_color': '#F2F2F2'})
 
@@ -418,17 +412,15 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     return (codes != codes.shift()).cumsum() % 2
 
                 def write_headers(ws, headers, dark_map):
-                    # 逐格写表头（避免整行染蓝）
                     for c, h in enumerate(headers):
                         ws.write(0, c, h, fmt_header)
                     for c_idx, txt in dark_map.items():
                         if 0 <= c_idx < len(headers):
                             ws.write(0, c_idx, txt, fmt_header_dark)
 
-                def apply_width_and_center(ws, widths, center_fmt):
-                    # 逐列设置宽度 + 居中（只对有效列）
+                def apply_width_and_center(ws, widths):
                     for i, w in enumerate(widths):
-                        ws.set_column(i, i, w, center_fmt)
+                        ws.set_column(i, i, w, fmt_center)
 
                 def add_zebra_conditional(ws, nrows, ncols, helper_col_idx):
                     if nrows <= 0 or ncols <= 0:
@@ -472,30 +464,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         elif kind == 'purple':
                             ws.conditional_format(1, col, nrows, col, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
-                def build_sheet(ws, df_curr, dark_headers_map, merge_cols, fixed_width_cols=None,
-                                fixed_width=24, min_w=6, max_w=22, hide_cols=None):
-                    """
-                    - fixed_width_cols: 不参与自适应列宽的列名（例如：['基础信息']）
-                    """
+                def build_sheet(ws, df_curr, dark_headers_map, merge_cols,
+                                fixed_width_map=None, min_w=6, max_w=22, hide_cols=None):
                     hide_cols = hide_cols or []
                     headers = list(df_curr.columns)
                     nrows = len(df_curr)
                     ncols = len(headers)
 
-                    # 1) 计算列宽（字符长度估算）
                     widths = estimate_col_widths(
                         df_curr,
-                        fixed_col_names=fixed_width_cols or [],
-                        fixed_width=fixed_width,
+                        fixed_width_map=fixed_width_map or {},
                         min_w=min_w,
                         max_w=max_w
                     )
-                    apply_width_and_center(ws, widths, fmt_center)
-
-                    # 2) 写表头（逐格写入）
+                    apply_width_and_center(ws, widths)
                     write_headers(ws, headers, dark_headers_map)
 
-                    # 3) zebra_id 辅助列（隐藏）
                     gid = get_group_ids(df_curr) if nrows > 0 else pd.Series(dtype=int)
                     helper_col_idx = ncols
                     ws.write(0, helper_col_idx, '_zebra', fmt_header)
@@ -503,19 +487,21 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ws.write(i + 1, helper_col_idx, int(gid.iloc[i]), fmt_center)
                     ws.set_column(helper_col_idx, helper_col_idx, None, None, {'hidden': True})
 
-                    # 4) 斑马纹（仅有效列范围）
                     add_zebra_conditional(ws, nrows, ncols, helper_col_idx)
 
-                    # 5) 合并视觉列
                     if nrows > 0 and merge_cols:
                         merge_visual_columns(ws, df_curr, merge_cols, gid)
 
-                    # 6) 隐藏列
                     for c in hide_cols:
                         if 0 <= c < ncols:
                             ws.set_column(c, c, None, None, {'hidden': True})
 
                     return nrows, ncols
+
+                fixed_width_map = {
+                    '图片函数': 20,   # ✅ 你要求固定20
+                    '基础信息': 26   # ✅ 继续固定（避免太长撑宽）
+                }
 
                 # =========================
                 # Sheet1：补货计算表（含在做列）
@@ -524,24 +510,25 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_sheet1.to_excel(writer, index=False, sheet_name=name1)
                 ws1 = writer.sheets[name1]
 
-                dark1 = {2: '产品编码', 4: 'SKU名称', 13: '建议采购数', 16: '冗余数量', 19: '建议调拨数量', 20: '本月仓储费(预警)'}
-                nrows1, ncols1 = build_sheet(
+                # 新列插入后索引变化（sheet1列序）：
+                # 0店铺 1在做 2产品编码 3图片函数 4基础信息 5SKU名称 6采购单价 ...
+                dark1 = {2: '产品编码', 5: 'SKU名称', 14: '建议采购数', 17: '冗余数量', 20: '建议调拨数量', 21: '本月仓储费(预警)'}
+                nrows1, _ = build_sheet(
                     ws1, df_sheet1, dark1,
-                    merge_cols=[0, 2],
-                    fixed_width_cols=['基础信息'],  # ✅ 基础信息固定宽，不参与自适应
-                    fixed_width=26,               # 你可以把这里改成 22/28 看你喜欢
+                    merge_cols=[0, 2, 3],  # ✅ 店铺/产品编码/图片函数 视觉合并；在做列不合并
+                    fixed_width_map=fixed_width_map,
                     min_w=6, max_w=22
                 )
 
                 apply_common_conditionals(ws1, nrows1, [
                     (2, 'bold'),
-                    (4, 'bold'),
-                    (13, 'red_bold'),
-                    (14, 'red_norm'),
-                    (16, 'orange_bold'),
-                    (17, 'orange_norm'),
-                    (19, 'blue'),
-                    (20, 'purple'),
+                    (5, 'bold'),
+                    (14, 'red_bold'),
+                    (15, 'red_norm'),
+                    (17, 'orange_bold'),
+                    (18, 'orange_norm'),
+                    (20, 'blue'),
+                    (21, 'purple'),
                 ])
 
                 # =========================
@@ -552,25 +539,26 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_buy.to_excel(writer, index=False, sheet_name=name2)
                 ws2 = writer.sheets[name2]
 
-                dark2 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
-                nrows2, ncols2 = build_sheet(
+                # df_buy列序：
+                # 0店铺 1产品编码 2图片函数 3基础信息 4SKU名称 ...
+                dark2 = {1: '产品编码', 4: 'SKU名称', 13: '建议采购数', 16: '冗余数量', 19: '建议调拨数量', 20: '本月仓储费(预警)'}
+                nrows2, _ = build_sheet(
                     ws2, df_buy, dark2,
-                    merge_cols=[0, 1],
-                    fixed_width_cols=['基础信息'],
-                    fixed_width=26,
+                    merge_cols=[0, 1, 2],  # ✅ 视觉合并到图片函数列
+                    fixed_width_map=fixed_width_map,
                     min_w=6, max_w=22,
-                    hide_cols=[14, 15, 16, 17, 18, 19]
+                    hide_cols=[15, 16, 17, 18, 19, 20]
                 )
 
                 apply_common_conditionals(ws2, nrows2, [
                     (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (4, 'bold'),
+                    (13, 'red_bold'),
+                    (14, 'red_norm'),
+                    (16, 'orange_bold'),
+                    (17, 'orange_norm'),
+                    (19, 'blue'),
+                    (20, 'purple'),
                 ])
 
                 # =========================
@@ -581,24 +569,23 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_trans.to_excel(writer, index=False, sheet_name=name3)
                 ws3 = writer.sheets[name3]
 
-                nrows3, ncols3 = build_sheet(
+                nrows3, _ = build_sheet(
                     ws3, df_trans, dark2,
-                    merge_cols=[0, 1],
-                    fixed_width_cols=['基础信息'],
-                    fixed_width=26,
+                    merge_cols=[0, 1, 2],
+                    fixed_width_map=fixed_width_map,
                     min_w=6, max_w=22,
-                    hide_cols=[12, 13, 14, 15, 16, 17, 19]
+                    hide_cols=[13, 14, 15, 16, 17, 18, 20]
                 )
 
                 apply_common_conditionals(ws3, nrows3, [
                     (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (4, 'bold'),
+                    (13, 'red_bold'),
+                    (14, 'red_norm'),
+                    (16, 'orange_bold'),
+                    (17, 'orange_norm'),
+                    (19, 'blue'),
+                    (20, 'purple'),
                 ])
 
                 # =========================
@@ -609,24 +596,23 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_fee.to_excel(writer, index=False, sheet_name=name4)
                 ws4 = writer.sheets[name4]
 
-                nrows4, ncols4 = build_sheet(
+                nrows4, _ = build_sheet(
                     ws4, df_fee, dark2,
-                    merge_cols=[0, 1],
-                    fixed_width_cols=['基础信息'],
-                    fixed_width=26,
+                    merge_cols=[0, 1, 2],
+                    fixed_width_map=fixed_width_map,
                     min_w=6, max_w=22,
-                    hide_cols=[11, 12, 13, 14, 15, 16, 17, 18]
+                    hide_cols=[12, 13, 14, 15, 16, 17, 18, 19]
                 )
 
                 apply_common_conditionals(ws4, nrows4, [
                     (1, 'bold'),
-                    (3, 'bold'),
-                    (12, 'red_bold'),
-                    (13, 'red_norm'),
-                    (15, 'orange_bold'),
-                    (16, 'orange_norm'),
-                    (18, 'blue'),
-                    (19, 'purple'),
+                    (4, 'bold'),
+                    (13, 'red_bold'),
+                    (14, 'red_norm'),
+                    (16, 'orange_bold'),
+                    (17, 'orange_norm'),
+                    (19, 'blue'),
+                    (20, 'purple'),
                 ])
 
             st.download_button(
