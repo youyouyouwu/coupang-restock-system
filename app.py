@@ -128,7 +128,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE])
                 df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND])
 
-                # ✅ N列是否在做（包含Y即可判定；大小写容错）
+                # N列是否在做（包含Y即可判定；大小写容错）
                 active_raw = clean_str(df_m.iloc[:, IDX_M_ACTIVE])
                 df_base['Active'] = active_raw.astype(str).str.contains('Y', case=False, na=False).map(lambda x: 'Y' if x else '')
             except IndexError:
@@ -201,13 +201,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
 
-            # 原始采购计算
+            # 采购建议
             df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
-
-            # ✅ 停做品：强制不采购
             inactive_mask = df_final['Active'].astype(str).str.upper().ne('Y')
-            df_final.loc[inactive_mask, 'Restock_Qty'] = 0
-
+            df_final.loc[inactive_mask, 'Restock_Qty'] = 0  # 停做品：强制不采购
             df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
 
             # 冗余
@@ -260,7 +257,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             }
             df_out_base.rename(columns=header_map_base, inplace=True)
 
-            # ✅ 仅用于：Streamlit显示 + Sheet1（插入“在做(Y)”列）
+            # ✅ Sheet1/展示专用（插入“在做(Y)”列）
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
@@ -270,10 +267,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             else:
                 df_display = df_sheet1.copy()
 
-            # ✅ 视觉“合并单元格”：同一产品编码块内，除第一行外，店铺/在做/产品编码显示为空
+            # ✅ 视觉“合并单元格”：只对【店铺名称】与【产品编码】按“品(产品编码)”做显示合并
+            # 在做(Y) 维度是SKU级，不做合并
             first_in_group = df_display['产品编码'].ne(df_display['产品编码'].shift())
             df_display_vis = df_display.copy()
-            for col in ['店铺名称', '在做(Y)', '产品编码']:
+            for col in ['店铺名称', '产品编码']:
                 df_display_vis.loc[~first_in_group, col] = ''
 
             zebra_group_ids = (df_display['产品编码'] != df_display['产品编码'].shift()).cumsum() % 2
@@ -336,7 +334,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             st_df = (
                 df_display_vis.style
                 .apply(highlight_zebra, axis=1)
-                .apply(highlight_bold_info, subset=['产品编码', 'SKU名称'])  # 产品编码块内只有首行显示，依然加粗没副作用
+                .apply(highlight_bold_info, subset=['产品编码', 'SKU名称'])
                 .apply(highlight_restock_qty, subset=['建议采购数'])
                 .apply(highlight_restock_money, subset=['预计采购总额(RMB)'])
                 .apply(highlight_redundancy_qty, subset=['冗余数量'])
@@ -363,7 +361,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
+            # ==========================================
             # Excel 导出
+            # ==========================================
             out_io = io.BytesIO()
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
@@ -381,16 +381,19 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True})
                 fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True})
 
-                # ✅ 合并用格式（只影响A/B/C信息列）
+                # ✅ 合并用格式：需要两套（普通/斑马纹），保证合并后斑马纹前后统一
                 fmt_merge = wb.add_format({'align': 'center', 'valign': 'vcenter'})
+                fmt_merge_zebra = wb.add_format({'align': 'center', 'valign': 'vcenter', 'bg_color': '#F2F2F2'})
 
                 # --- 封装格式化函数（原结构：20列 A:T）---
                 def format_sheet(ws, df_curr, hide_cols=[]):
+                    # 斑马纹（按产品编码分组）
                     curr_zebra_ids = (df_curr['产品编码'] != df_curr['产品编码'].shift()).cumsum() % 2
                     for i, gid in enumerate(curr_zebra_ids):
                         if gid == 1:
                             ws.set_row(i + 1, None, fmt_zebra)
 
+                    # 表头
                     ws.set_row(0, None, fmt_header)
                     target_headers = {
                         1: '产品编码',
@@ -404,9 +407,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ws.write(0, col_idx, text, fmt_header_dark)
                     ws.set_column('A:T', 13)
 
+                    # 隐藏列
                     for c_idx in hide_cols:
                         ws.set_column(c_idx, c_idx, None, None, {'hidden': True})
 
+                    # 条件格式
                     nrows = len(df_curr)
                     ws.conditional_format(1, 1, nrows, 1, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
                     ws.conditional_format(1, 3, nrows, 3, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold_col})
@@ -447,29 +452,34 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     ws.conditional_format(1, 19, nrows, 19, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_blue})
                     ws.conditional_format(1, 20, nrows, 20, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
-                # ✅ Sheet1：补货计算表（含“在做(Y)”列）
+                # --- Sheet1: 补货计算表（含在做列） ---
                 df_sheet1.to_excel(writer, index=False, sheet_name='补货计算表')
                 ws1 = writer.sheets['补货计算表']
                 format_sheet_with_active(ws1, df_sheet1)
 
-                # ✅ Excel 视觉合并：按“产品编码”连续块合并 A/B/C 三列
+                # ✅ Excel 视觉合并：按“产品编码”连续块合并【店铺名称(A列)】与【产品编码(C列)】
+                # 不合并 在做(Y)（B列），保持SKU维度独立显示
                 codes = df_sheet1['产品编码'].astype(str).fillna('')
+                group_ids = (codes != codes.shift()).cumsum() % 2  # 与斑马纹逻辑一致
                 start = 0
                 for i in range(1, len(codes) + 1):
                     is_break = (i == len(codes)) or (codes.iloc[i] != codes.iloc[i - 1])
                     if is_break:
                         end = i - 1
                         if end > start:
-                            # +1 是因为Excel第1行是表头
-                            r1 = start + 1
+                            # 选用与该组斑马一致的合并格式（解决“合并后斑马纹不统一”）
+                            gid = int(group_ids.iloc[start])
+                            merge_fmt = fmt_merge_zebra if gid == 1 else fmt_merge
+
+                            r1 = start + 1  # +1 跳过表头
                             r2 = end + 1
-                            # A列=0 店铺名称，B列=1 在做(Y)，C列=2 产品编码
-                            ws1.merge_range(r1, 0, r2, 0, df_sheet1.iloc[start, 0], fmt_merge)
-                            ws1.merge_range(r1, 1, r2, 1, df_sheet1.iloc[start, 1], fmt_merge)
-                            ws1.merge_range(r1, 2, r2, 2, df_sheet1.iloc[start, 2], fmt_merge)
+                            # A列=0 店铺名称
+                            ws1.merge_range(r1, 0, r2, 0, df_sheet1.iloc[start, 0], merge_fmt)
+                            # C列=2 产品编码
+                            ws1.merge_range(r1, 2, r2, 2, df_sheet1.iloc[start, 2], merge_fmt)
                         start = i
 
-                # --- Sheet2: 采购单（只保留在做 + 建议采购数>0；不做合并） ---
+                # --- Sheet2: 采购单（不合并，保持原样） ---
                 df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
                 df_buy.to_excel(writer, index=False, sheet_name='采购单(找工厂)')
                 format_sheet(writer.sheets['采购单(找工厂)'], df_buy, hide_cols=[14, 15, 16, 17, 18, 19])
