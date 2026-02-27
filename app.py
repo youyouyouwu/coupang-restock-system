@@ -72,14 +72,6 @@ def read_file(file):
             continue
     return pd.DataFrame()
 
-def col_to_excel(col_idx: int) -> str:
-    n = col_idx + 1
-    s = ""
-    while n:
-        n, r = divmod(n - 1, 26)
-        s = chr(65 + r) + s
-    return s
-
 def estimate_col_widths(df: pd.DataFrame, fixed_col_names=None, fixed_width=24,
                         min_w=6, max_w=22, header_pad=2, cell_pad=2):
     fixed_col_names = set(fixed_col_names or [])
@@ -96,6 +88,14 @@ def estimate_col_widths(df: pd.DataFrame, fixed_col_names=None, fixed_width=24,
         best = max(min_w, min(max_w, best))
         widths.append(best)
     return widths
+
+def col_to_excel(col_idx: int) -> str:
+    n = col_idx + 1
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
 
 # ==========================================
 # 4. 侧边栏
@@ -191,83 +191,39 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> by
       --zebra: #f1f1f1;
       --white: #fff;
     }}
-
     html, body {{
-      margin: 0;
-      padding: 0;
-      color: var(--fg);
+      margin: 0; padding: 0; color: var(--fg);
       font-family: "Noto Sans SC","Noto Sans KR",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
       background: var(--white);
     }}
-
     .page {{
-      width: 210mm;
-      margin: 0 auto;
-      padding: 14mm 12mm;
-      box-sizing: border-box;
+      width: 210mm; margin: 0 auto;
+      padding: 14mm 12mm; box-sizing: border-box;
     }}
-
     .header {{
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      gap: 12px;
-      border-bottom: 2px solid var(--line);
-      padding-bottom: 10px;
-      margin-bottom: 12px;
+      display: flex; justify-content: space-between; align-items: flex-end;
+      gap: 12px; border-bottom: 2px solid var(--line);
+      padding-bottom: 10px; margin-bottom: 12px;
     }}
-
-    .title {{
-      font-size: 18px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      margin: 0;
-    }}
-
-    .meta {{
-      font-size: 12px;
-      color: var(--muted);
-      text-align: right;
-      white-space: nowrap;
-    }}
-
-    .sub {{
-      margin: 6px 0 0 0;
-      font-size: 12px;
-      color: var(--muted);
-    }}
-
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-    }}
-
+    .title {{ font-size: 18px; font-weight: 600; margin: 0; }}
+    .meta {{ font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }}
+    .sub {{ margin: 6px 0 0 0; font-size: 12px; color: var(--muted); }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
     th {{
-      background: var(--head);
-      color: #fff;
-      padding: 8px 6px;
-      border: 1px solid var(--line);
-      text-align: center;
-      font-weight: 600;
+      background: var(--head); color: #fff;
+      padding: 8px 6px; border: 1px solid var(--line);
+      text-align: center; font-weight: 600;
     }}
-
     td {{
       border: 1px solid var(--line);
-      padding: 6px 6px;
-      vertical-align: middle;
+      padding: 6px 6px; vertical-align: middle;
       word-break: break-word;
     }}
-
     .td-center {{ text-align: center; }}
     .td-left {{ text-align: left; }}
-
-    tr.z1 td {{
-      background: var(--zebra);
-    }}
-
+    tr.z1 td {{ background: var(--zebra); }}
     @media print {{
       .page {{ padding: 10mm 10mm; }}
       thead {{ display: table-header-group; }}
@@ -275,7 +231,6 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str = "") -> by
     }}
   </style>
 </head>
-
 <body>
   <div class="page">
     <div class="header">
@@ -320,7 +275,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 df_base['Cost'] = clean_num(df_m.iloc[:, IDX_M_COST])
                 df_base['Orange_ID'] = clean_match_key(df_m.iloc[:, IDX_M_ORANGE])
                 df_base['Inbound_Code'] = clean_match_key(df_m.iloc[:, IDX_M_INBOUND])
-
                 active_raw = clean_str(df_m.iloc[:, IDX_M_ACTIVE])
                 df_base['Active'] = active_raw.astype(str).str.contains('Y', case=False, na=False).map(lambda x: 'Y' if x else '')
             except IndexError:
@@ -446,114 +400,29 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
-            # ==========================
-            # Streamlit 展示（不改）
-            # ==========================
-            if search_key:
-                df_display = df_sheet1[df_sheet1['产品编码'].astype(str).str.contains(search_key, case=False, na=False)].copy()
-            else:
-                df_display = df_sheet1.copy()
-
-            first_in_group = df_display['产品编码'].ne(df_display['产品编码'].shift())
-            df_display_vis = df_display.copy()
-            for col in ['店铺名称', '产品编码']:
-                df_display_vis.loc[~first_in_group, col] = ''
-
-            zebra_group_ids = (df_display['产品编码'] != df_display['产品编码'].shift()).cumsum() % 2
-
-            st.divider()
-
-            buy_mask = df_display['建议采购数'] > 0
-            k1_cnt = len(df_display[buy_mask])
-            k1_val = df_display.loc[buy_mask, '预计采购总额(RMB)'].sum()
-
-            red_mask = df_display['冗余数量'] > 0
-            k2_cnt = len(df_display[red_mask])
-            k2_val = df_display.loc[red_mask, '冗余资金'].sum()
-
-            trans_mask = df_display['建议调拨数量'] > 0
-            k3_cnt = len(df_display[trans_mask])
-            k3_val = df_display.loc[trans_mask, '建议调拨数量'].sum()
-
-            fee_mask = df_display['本月仓储费(预警)'] > 0
-            k4_cnt = len(df_display[fee_mask])
-            k4_val = df_display.loc[fee_mask, '本月仓储费(预警)'].sum()
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("**📦 需采购 SKU / 金额**", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
-            m2.metric("**⚠️ 冗余 SKU / 资金**", f"{k2_cnt} 个", f"¥ {k2_val:,.0f}", delta_color="inverse")
-            m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
-            m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
-
-            def highlight_zebra(row):
-                try:
-                    gidv = zebra_group_ids.loc[row.name]
-                    if gidv == 1:
-                        return ['background-color: #f7f7f7'] * len(row)
-                except:
-                    pass
-                return [''] * len(row)
-
-            def highlight_bold_info(s):
-                return ['font-weight: bold'] * len(s)
-
-            def highlight_restock_qty(s):
-                return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if v > 0 else '' for v in s]
-
-            def highlight_restock_money(s):
-                return ['background-color: #ffcccc; color: #b71c1c' if v > 0 else '' for v in s]
-
-            def highlight_redundancy_qty(s):
-                return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if v > 0 else '' for v in s]
-
-            def highlight_redundancy_money(s):
-                return ['background-color: #ffe0b2; color: #e65100' if v > 0 else '' for v in s]
-
-            def highlight_transfer(s):
-                return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if v > 0 else '' for v in s]
-
-            def highlight_fee(s):
-                return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if v > 0 else '' for v in s]
-
-            st_df = (
-                df_display_vis.style
-                .apply(highlight_zebra, axis=1)
-                .apply(highlight_bold_info, subset=['产品编码', 'SKU名称'])
-                .apply(highlight_restock_qty, subset=['建议采购数'])
-                .apply(highlight_restock_money, subset=['预计采购总额(RMB)'])
-                .apply(highlight_redundancy_qty, subset=['冗余数量'])
-                .apply(highlight_redundancy_money, subset=['冗余资金'])
-                .apply(highlight_transfer, subset=['建议调拨数量'])
-                .apply(highlight_fee, subset=['本月仓储费(预警)'])
-                .format({
-                    '橙火库存': '{:.0f}',
-                    '极风库存': '{:.0f}',
-                    '库存合计': '{:.0f}',
-                    f'总安全库存(有码>{min_safety_qty})': '{:.0f}',
-                    f'冗余标准({redundancy_weeks}周)': '{:.0f}',
-                    f'橙火安全库存(有码>{min_safety_qty})': '{:.0f}',
-                    '建议采购数': '{:.0f}',
-                    '预计采购总额(RMB)': '{:,.0f}',
-                    '7天销量': '{:.0f}',
-                    '采购单价': '{:,.0f}',
-                    '冗余数量': '{:.0f}',
-                    '冗余资金': '{:,.0f}',
-                    '建议调拨数量': '{:.0f}',
-                    '本月仓储费(预警)': '{:,.0f}',
-                })
-            )
-            st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
-
             # ==========================================
-            # Excel 导出（超级表 + 分组斑马纹）
+            # Excel 导出（真正超级表：用 add_table 一次性写）
             # ==========================================
+            def make_df_for_table(df_curr: pd.DataFrame, blank_cols):
+                """为了兼容Table（不能合并单元格），将同产品编码组的非首行置空（视觉等价于合并）。"""
+                df2 = df_curr.copy()
+                codes = df2['产品编码'].astype(str).fillna('')
+                first = codes.ne(codes.shift())
+                for c in blank_cols:
+                    if c in df2.columns:
+                        df2.loc[~first, c] = ''
+                gid = (codes != codes.shift()).cumsum() % 2  # 仍用原始codes算分组
+                return df2, gid
+
             def make_excel_bytes():
                 out_io = io.BytesIO()
                 with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                     wb = writer.book
 
+                    # 基础格式
                     fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                     fmt_left = wb.add_format({'align': 'left', 'valign': 'vcenter'})
+
                     fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
                     fmt_header_dark = wb.add_format({'bold': True, 'bg_color': '#1F497D', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
@@ -568,16 +437,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     fmt_blue = wb.add_format({'bg_color': '#C5D9F1', 'font_color': '#1F497D', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                     fmt_purple = wb.add_format({'bg_color': '#E1BEE7', 'font_color': '#4A148C', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
 
-                    fmt_merge = wb.add_format({'align': 'center', 'valign': 'vcenter'})
-                    fmt_merge_zebra = wb.add_format({'align': 'center', 'valign': 'vcenter', 'bg_color': '#F2F2F2'})
-
-                    def get_group_ids(df_curr: pd.DataFrame) -> pd.Series:
-                        codes = df_curr['产品编码'].astype(str).fillna('')
-                        return (codes != codes.shift()).cumsum() % 2
-
-                    def write_headers(ws, headers, dark_map):
-                        for c, h in enumerate(headers):
-                            ws.write(0, c, h, fmt_header)
+                    def write_headers_dark(ws, headers, dark_map):
+                        # Table会写一遍header，这里仅把需要加深色的表头覆盖写一次即可
                         for c_idx, txt in dark_map.items():
                             if 0 <= c_idx < len(headers):
                                 ws.write(0, c_idx, txt, fmt_header_dark)
@@ -598,32 +459,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                                 idx = list(df_curr.columns).index(col_name)
                                 ws.set_column(idx, idx, None, fmt_left)
 
-                    def add_zebra(ws, df_curr, nrows, ncols, helper_col_idx):
-                        if nrows <= 0 or ncols <= 0:
-                            return
+                    def add_group_zebra(ws, df_curr, gid: pd.Series, nrows, ncols, helper_col_idx):
+                        # 写helper列（隐藏）
+                        ws.write(0, helper_col_idx, '_zebra', fmt_header)
+                        for i in range(nrows):
+                            ws.write(i + 1, helper_col_idx, int(gid.iloc[i]), fmt_center)
+                        ws.set_column(helper_col_idx, helper_col_idx, None, None, {'hidden': True})
+
                         helper_letter = col_to_excel(helper_col_idx)
                         formula = f'=${helper_letter}2=1'
                         ws.conditional_format(1, 0, nrows, ncols - 1, {'type': 'formula', 'criteria': formula, 'format': fmt_zebra})
+
                         # zebra下两列左对齐覆盖
                         for col_name in ['基础信息', 'SKU名称']:
                             if col_name in df_curr.columns:
                                 cidx = list(df_curr.columns).index(col_name)
                                 ws.conditional_format(1, cidx, nrows, cidx, {'type': 'formula', 'criteria': formula, 'format': fmt_zebra_left})
-
-                    def merge_visual(ws, df_curr, merge_cols, gid: pd.Series):
-                        codes = df_curr['产品编码'].astype(str).fillna('')
-                        start = 0
-                        for i in range(1, len(codes) + 1):
-                            is_break = (i == len(codes)) or (codes.iloc[i] != codes.iloc[i - 1])
-                            if is_break:
-                                end = i - 1
-                                if end > start:
-                                    g = int(gid.iloc[start])
-                                    mfmt = fmt_merge_zebra if g == 1 else fmt_merge
-                                    r1, r2 = start + 1, end + 1
-                                    for c_idx in merge_cols:
-                                        ws.merge_range(r1, c_idx, r2, c_idx, df_curr.iloc[start, c_idx], mfmt)
-                                start = i
 
                     def apply_conditionals(ws, nrows, mapping):
                         if nrows <= 0:
@@ -644,74 +495,71 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                             elif kind == 'purple':
                                 ws.conditional_format(1, col, nrows, col, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': fmt_purple})
 
-                    def add_excel_table(ws, df_curr, nrows, ncols):
-                        """把区域变成Excel超级表（Table），但关闭自带banded_rows，避免覆盖我们按产品编码的斑马纹。"""
-                        if nrows <= 0 or ncols <= 0:
-                            return
-                        cols = [{'header': h} for h in list(df_curr.columns)]
+                    table_seq = 1
+
+                    def build_sheet_table(df_src, sheet_name, dark_headers_map, blank_cols,
+                                          fixed_width_cols=None, hide_cols=None,
+                                          cond_mapping=None):
+                        nonlocal table_seq
+                        hide_cols = hide_cols or []
+                        cond_mapping = cond_mapping or []
+
+                        # 1) 处理成“可Table显示”的视觉版本（不合并）
+                        df_curr, gid = make_df_for_table(df_src, blank_cols=blank_cols)
+
+                        # 2) 创建worksheet
+                        ws = wb.add_worksheet(sheet_name)
+                        writer.sheets[sheet_name] = ws
+
+                        headers = list(df_curr.columns)
+                        nrows = len(df_curr)
+                        ncols = len(headers)
+
+                        # 3) 列宽 + 对齐
+                        apply_widths(ws, df_curr, fixed_width_cols=fixed_width_cols, fixed_width=26, min_w=6, max_w=22)
+
+                        # 4) 用 add_table 一次性写表头+数据（避免OverlappingRange）
+                        data = df_curr.fillna('').values.tolist()
+                        cols = [{'header': h} for h in headers]
+                        table_name = f"tbl_{table_seq}"
+                        table_seq += 1
+
                         ws.add_table(
                             0, 0, nrows, ncols - 1,
                             {
+                                'name': table_name,
                                 'columns': cols,
+                                'data': data,
                                 'style': 'Table Style Medium 2',
-                                'banded_rows': False,      # ✅ 关键：不让超级表自己按行斑马纹
+                                'banded_rows': False,      # ✅ 关闭Table自带斑马纹
                                 'autofilter': True,
                                 'header_row': True,
                                 'header_format': fmt_header
                             }
                         )
 
-                    def build_sheet(df_curr, sheet_name, dark_headers_map, merge_cols, fixed_width_cols=None,
-                                    hide_cols=None, fixed_width=26, min_w=6, max_w=22,
-                                    cond_mapping=None):
-                        hide_cols = hide_cols or []
-                        cond_mapping = cond_mapping or []
-                        df_curr.to_excel(writer, index=False, sheet_name=sheet_name)
-                        ws = writer.sheets[sheet_name]
+                        # 5) 深色表头覆盖
+                        write_headers_dark(ws, headers, dark_headers_map)
 
-                        headers = list(df_curr.columns)
-                        nrows = len(df_curr)
-                        ncols = len(headers)
-
-                        # 列宽 + 左对齐
-                        apply_widths(ws, df_curr, fixed_width_cols=fixed_width_cols, fixed_width=fixed_width, min_w=min_w, max_w=max_w)
-
-                        # 表头逐格写（避免扩展到空白列）
-                        write_headers(ws, headers, dark_headers_map)
-
-                        # zebra helper列
-                        gid = get_group_ids(df_curr) if nrows > 0 else pd.Series(dtype=int)
+                        # 6) 斑马纹（按产品编码分组）
                         helper_col_idx = ncols
-                        ws.write(0, helper_col_idx, '_zebra', fmt_header)
-                        for i in range(nrows):
-                            ws.write(i + 1, helper_col_idx, int(gid.iloc[i]), fmt_center)
-                        ws.set_column(helper_col_idx, helper_col_idx, None, None, {'hidden': True})
+                        add_group_zebra(ws, df_curr, gid, nrows, ncols, helper_col_idx)
 
-                        # 按产品编码分组斑马纹
-                        add_zebra(ws, df_curr, nrows, ncols, helper_col_idx)
+                        # 7) 条件高亮
+                        apply_conditionals(ws, nrows, cond_mapping)
 
-                        # 合并显示（仅视觉，不影响计算）
-                        if nrows > 0 and merge_cols:
-                            merge_visual(ws, df_curr, merge_cols, gid)
-
-                        # 隐藏列
+                        # 8) 隐藏列（仅隐藏可见列，table依然存在）
                         for c in hide_cols:
                             if 0 <= c < ncols:
                                 ws.set_column(c, c, None, None, {'hidden': True})
 
-                        # 条件高亮
-                        apply_conditionals(ws, nrows, cond_mapping)
+                        return df_curr  # 返回视觉版供HTML用（可选）
 
-                        # ✅ 最后：加超级表（关闭自带斑马纹）
-                        add_excel_table(ws, df_curr, nrows, ncols)
-
-                        return ws
-
-                    # -------- Sheet1 --------
+                    # ===== Sheet1 =====
                     dark1 = {2: '产品编码', 4: 'SKU名称', 13: '建议采购数', 16: '冗余数量', 19: '建议调拨数量', 20: '本月仓储费(预警)'}
-                    build_sheet(
+                    build_sheet_table(
                         df_sheet1, '补货计算表', dark1,
-                        merge_cols=[0, 2],
+                        blank_cols=['店铺名称', '产品编码'],   # ✅ 视觉置空，代替合并
                         fixed_width_cols=['基础信息'],
                         cond_mapping=[
                             (2, 'bold'), (4, 'bold'),
@@ -721,12 +569,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ]
                     )
 
-                    # -------- Sheet2 --------
+                    # ===== Sheet2 =====
                     df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
                     dark2 = {1: '产品编码', 3: 'SKU名称', 12: '建议采购数', 15: '冗余数量', 18: '建议调拨数量', 19: '本月仓储费(预警)'}
-                    build_sheet(
+                    df_buy_vis = build_sheet_table(
                         df_buy, '采购单(找工厂)', dark2,
-                        merge_cols=[0, 1],
+                        blank_cols=['店铺名称', '产品编码'],
                         fixed_width_cols=['基础信息'],
                         hide_cols=[14, 15, 16, 17, 18, 19],
                         cond_mapping=[
@@ -737,11 +585,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ]
                     )
 
-                    # -------- Sheet3 --------
+                    # ===== Sheet3 =====
                     df_trans = df_out_base[df_out_base['建议调拨数量'] > 0].copy()
-                    build_sheet(
+                    df_trans_vis = build_sheet_table(
                         df_trans, '调拨单(发橙火)', dark2,
-                        merge_cols=[0, 1],
+                        blank_cols=['店铺名称', '产品编码'],
                         fixed_width_cols=['基础信息'],
                         hide_cols=[12, 13, 14, 15, 16, 17, 19],
                         cond_mapping=[
@@ -752,11 +600,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ]
                     )
 
-                    # -------- Sheet4 --------
+                    # ===== Sheet4 =====
                     df_fee = df_out_base[df_out_base['本月仓储费(预警)'] > 0].copy()
-                    build_sheet(
+                    df_fee_vis = build_sheet_table(
                         df_fee, '库龄预警单(需重入库)', dark2,
-                        merge_cols=[0, 1],
+                        blank_cols=['店铺名称', '产品编码'],
                         fixed_width_cols=['基础信息'],
                         hide_cols=[11, 12, 13, 14, 15, 16, 17, 18],
                         cond_mapping=[
@@ -767,21 +615,20 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                         ]
                     )
 
-                return out_io.getvalue(), df_buy, df_trans, df_fee
+                return out_io.getvalue(), df_buy_vis, df_trans_vis, df_fee_vis
 
-            excel_bytes, df_buy, df_trans, df_fee = make_excel_bytes()
+            excel_bytes, df_buy_vis, df_trans_vis, df_fee_vis = make_excel_bytes()
 
-            # HTML 工单
-            html_buy = make_work_order_html(df_buy, "采购工单（找工厂）", "范围：建议采购数 > 0")
-            html_trans = make_work_order_html(df_trans, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
-            html_fee = make_work_order_html(df_fee, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
+            # HTML 工单（用“视觉版”导出，和Excel一致）
+            html_buy = make_work_order_html(df_buy_vis, "采购工单（找工厂）", "范围：建议采购数 > 0")
+            html_trans = make_work_order_html(df_trans_vis, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
+            html_fee = make_work_order_html(df_fee_vis, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
 
-            # ==========================================
-            # 打包 ZIP：Excel + 3个HTML
-            # ==========================================
+            # ZIP 打包
             zip_buf = io.BytesIO()
             stamp = pd.Timestamp.now().strftime('%Y%m%d')
             excel_name = f"Coupang_Restock_Full_v18_{stamp}.xlsx"
+
             with zipfile.ZipFile(zip_buf, 'w', compression=zipfile.ZIP_DEFLATED) as z:
                 z.writestr(excel_name, excel_bytes)
                 z.writestr(f"WorkOrder_Buy_{stamp}.html", html_buy)
@@ -789,7 +636,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 z.writestr(f"WorkOrder_Fee_{stamp}.html", html_fee)
 
             st.download_button(
-                "📦 下载压缩包（Excel + 3个工单HTML）",
+                "📦 下载压缩包（Excel超级表 + 3个工单HTML）",
                 data=zip_buf.getvalue(),
                 file_name=f"Coupang_Restock_Pack_{stamp}.zip",
                 mime="application/zip",
