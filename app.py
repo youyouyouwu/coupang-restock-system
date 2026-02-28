@@ -198,6 +198,12 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
 """
     return html.encode("utf-8")
 
+def _safe_float(x):
+    try:
+        return float(x)
+    except:
+        return 0.0
+
 # ==========================================
 # 4. 侧边栏
 # ==========================================
@@ -331,9 +337,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
 
-            # --- ✅ 橙火安全库存（调拨预警）：不使用保底库存 ---
+            # ✅ 调拨：不计算保底库存
             df_final['Orange_Safety_Calc'] = df_final['Sales_7d'] * orange_safety_weeks
-            df_final['Orange_Safety_Std'] = df_final['Orange_Safety_Calc']  # ✅ 不做max(..., min_safety_qty)
+            df_final['Orange_Safety_Std'] = df_final['Orange_Safety_Calc']  # 不做 max(..., min_safety_qty)
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
             # --- G. 整理输出 ---
@@ -363,11 +369,17 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
                 'Redundancy_Qty': '冗余数量',
                 'Redundancy_Money': '冗余资金',
-                'Orange_Safety_Std': f'橙火安全库存(不含保底)',
+                # ✅ 列名保持原样（避免你看板/导出依赖列名出问题）
+                'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})',
                 'Orange_Transfer_Qty': '建议调拨数量',
                 'Storage_Fee': '本月仓储费(预警)'
             }
             df_out_base.rename(columns=header_map_base, inplace=True)
+
+            # ✅ 关键修复：提前定义 df_buy / df_trans / df_fee（供导出 + 打包使用）
+            df_buy = df_out_base[df_out_base['建议采购数'].astype(float) > 0].copy()
+            df_trans = df_out_base[df_out_base['建议调拨数量'].astype(float) > 0].copy()
+            df_fee = df_out_base[df_out_base['本月仓储费(预警)'].astype(float) > 0].copy()
 
             # Sheet1/展示专用：插入“在做(Y)”列
             df_sheet1 = df_out_base.copy()
@@ -381,22 +393,21 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             else:
                 df_display = df_sheet1.copy()
 
-            # KPI
-            buy_mask = df_display.get('建议采购数', pd.Series([0] * len(df_display))).astype(float) > 0
+            buy_mask = df_display.get('建议采购数', pd.Series([0] * len(df_display))).map(_safe_float) > 0
             k1_cnt = int(buy_mask.sum())
-            k1_val = float(df_display.loc[buy_mask, '预计采购总额(RMB)'].sum()) if '预计采购总额(RMB)' in df_display.columns else 0.0
+            k1_val = float(df_display.loc[buy_mask, '预计采购总额(RMB)'].map(_safe_float).sum()) if '预计采购总额(RMB)' in df_display.columns else 0.0
 
-            red_mask = df_display.get('冗余数量', pd.Series([0] * len(df_display))).astype(float) > 0
+            red_mask = df_display.get('冗余数量', pd.Series([0] * len(df_display))).map(_safe_float) > 0
             k2_cnt = int(red_mask.sum())
-            k2_val = float(df_display.loc[red_mask, '冗余资金'].sum()) if '冗余资金' in df_display.columns else 0.0
+            k2_val = float(df_display.loc[red_mask, '冗余资金'].map(_safe_float).sum()) if '冗余资金' in df_display.columns else 0.0
 
-            trans_mask = df_display.get('建议调拨数量', pd.Series([0] * len(df_display))).astype(float) > 0
+            trans_mask = df_display.get('建议调拨数量', pd.Series([0] * len(df_display))).map(_safe_float) > 0
             k3_cnt = int(trans_mask.sum())
-            k3_val = float(df_display.loc[trans_mask, '建议调拨数量'].sum()) if '建议调拨数量' in df_display.columns else 0.0
+            k3_val = float(df_display.loc[trans_mask, '建议调拨数量'].map(_safe_float).sum()) if '建议调拨数量' in df_display.columns else 0.0
 
-            fee_mask = df_display.get('本月仓储费(预警)', pd.Series([0] * len(df_display))).astype(float) > 0
+            fee_mask = df_display.get('本月仓储费(预警)', pd.Series([0] * len(df_display))).map(_safe_float) > 0
             k4_cnt = int(fee_mask.sum())
-            k4_val = float(df_display.loc[fee_mask, '本月仓储费(预警)'].sum()) if '本月仓储费(预警)' in df_display.columns else 0.0
+            k4_val = float(df_display.loc[fee_mask, '本月仓储费(预警)'].map(_safe_float).sum()) if '本月仓储费(预警)' in df_display.columns else 0.0
 
             st.divider()
             m1, m2, m3, m4 = st.columns(4)
@@ -405,7 +416,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
             m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
-            # 视觉置空
             df_display_vis = df_display.copy()
             if '产品编码' in df_display_vis.columns:
                 first_in_group = df_display_vis['产品编码'].astype(str).fillna('').ne(df_display_vis['产品编码'].astype(str).shift())
@@ -429,22 +439,22 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 return ['font-weight: bold'] * len(row)
 
             def highlight_restock_qty(s):
-                return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if float(v) > 0 else '' for v in s]
+                return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if _safe_float(v) > 0 else '' for v in s]
 
             def highlight_restock_money(s):
-                return ['background-color: #ffcccc; color: #b71c1c' if float(v) > 0 else '' for v in s]
+                return ['background-color: #ffcccc; color: #b71c1c' if _safe_float(v) > 0 else '' for v in s]
 
             def highlight_redundancy_qty(s):
-                return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if float(v) > 0 else '' for v in s]
+                return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if _safe_float(v) > 0 else '' for v in s]
 
             def highlight_redundancy_money(s):
-                return ['background-color: #ffe0b2; color: #e65100' if float(v) > 0 else '' for v in s]
+                return ['background-color: #ffe0b2; color: #e65100' if _safe_float(v) > 0 else '' for v in s]
 
             def highlight_transfer(s):
-                return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if float(v) > 0 else '' for v in s]
+                return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if _safe_float(v) > 0 else '' for v in s]
 
             def highlight_fee(s):
-                return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if float(v) > 0 else '' for v in s]
+                return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if _safe_float(v) > 0 else '' for v in s]
 
             st_df = df_display_vis.style.apply(highlight_zebra, axis=1)
 
@@ -473,6 +483,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_map[f'总安全库存(有码>{min_safety_qty})'] = '{:.0f}'
             if f'冗余标准({redundancy_weeks}周)' in df_display_vis.columns:
                 fmt_map[f'冗余标准({redundancy_weeks}周)'] = '{:.0f}'
+            if f'橙火安全库存(有码>{min_safety_qty})' in df_display_vis.columns:
+                fmt_map[f'橙火安全库存(有码>{min_safety_qty})'] = '{:.0f}'
             if '预计采购总额(RMB)' in df_display_vis.columns:
                 fmt_map['预计采购总额(RMB)'] = '{:,.0f}'
             if '采购单价' in df_display_vis.columns:
