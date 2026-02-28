@@ -116,7 +116,6 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
     for c in df2.columns:
         df2[c] = df2[c].fillna('').astype(str)
 
-    # 分组斑马纹（按产品编码）
     if '产品编码' in df2.columns and len(df2) > 0:
         codes = df2['产品编码'].astype(str).fillna('')
         gid = (codes.ne(codes.shift()).cumsum() % 2).astype(int)
@@ -381,12 +380,127 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
-            # --- H. 搜索与看板（保持你原样：普通预览） ---
+            # ==========================================
+            # ✅ H. 搜索与KPI + 高亮看板（按产品编码分组斑马纹）
+            # ==========================================
             if search_key:
                 df_display = df_sheet1[df_sheet1['产品编码'].astype(str).str.contains(search_key, case=False, na=False)].copy()
             else:
                 df_display = df_sheet1.copy()
-            st.dataframe(df_display, use_container_width=True, height=600, hide_index=True)
+
+            # KPI（按当前筛选后的df_display）
+            buy_mask = df_display.get('建议采购数', pd.Series([0] * len(df_display))).astype(float) > 0
+            k1_cnt = int(buy_mask.sum())
+            k1_val = float(df_display.loc[buy_mask, '预计采购总额(RMB)'].sum()) if '预计采购总额(RMB)' in df_display.columns else 0.0
+
+            red_mask = df_display.get('冗余数量', pd.Series([0] * len(df_display))).astype(float) > 0
+            k2_cnt = int(red_mask.sum())
+            k2_val = float(df_display.loc[red_mask, '冗余资金'].sum()) if '冗余资金' in df_display.columns else 0.0
+
+            trans_mask = df_display.get('建议调拨数量', pd.Series([0] * len(df_display))).astype(float) > 0
+            k3_cnt = int(trans_mask.sum())
+            k3_val = float(df_display.loc[trans_mask, '建议调拨数量'].sum()) if '建议调拨数量' in df_display.columns else 0.0
+
+            fee_mask = df_display.get('本月仓储费(预警)', pd.Series([0] * len(df_display))).astype(float) > 0
+            k4_cnt = int(fee_mask.sum())
+            k4_val = float(df_display.loc[fee_mask, '本月仓储费(预警)'].sum()) if '本月仓储费(预警)' in df_display.columns else 0.0
+
+            st.divider()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("**📦 需采购 SKU / 金额**", f"{k1_cnt} 个", f"¥ {k1_val:,.0f}")
+            m2.metric("**⚠️ 冗余 SKU / 资金**", f"{k2_cnt} 个", f"¥ {k2_val:,.0f}", delta_color="inverse")
+            m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
+            m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
+
+            # 视觉置空（店铺名称/产品编码同一产品只显示一次）
+            df_display_vis = df_display.copy()
+            if '产品编码' in df_display_vis.columns:
+                first_in_group = df_display_vis['产品编码'].astype(str).fillna('').ne(df_display_vis['产品编码'].astype(str).shift())
+                for col in ['店铺名称', '产品编码']:
+                    if col in df_display_vis.columns:
+                        df_display_vis.loc[~first_in_group, col] = ''
+
+                # 按产品编码分组斑马纹
+                zebra_group_ids = (df_display['产品编码'].astype(str).fillna('').ne(df_display['产品编码'].astype(str).shift()).cumsum() % 2)
+            else:
+                zebra_group_ids = pd.Series([0] * len(df_display_vis), index=df_display_vis.index)
+
+            def highlight_zebra(row):
+                try:
+                    gid = zebra_group_ids.loc[row.name]
+                    if int(gid) == 1:
+                        return ['background-color: #f7f7f7'] * len(row)
+                except:
+                    pass
+                return [''] * len(row)
+
+            def highlight_bold_cols(row):
+                # 用于“产品编码、SKU名称”整列加粗
+                return ['font-weight: bold'] * len(row)
+
+            def highlight_restock_qty(s):
+                return ['background-color: #ffcccc; color: #b71c1c; font-weight: bold' if float(v) > 0 else '' for v in s]
+
+            def highlight_restock_money(s):
+                return ['background-color: #ffcccc; color: #b71c1c' if float(v) > 0 else '' for v in s]
+
+            def highlight_redundancy_qty(s):
+                return ['background-color: #ffe0b2; color: #e65100; font-weight: bold' if float(v) > 0 else '' for v in s]
+
+            def highlight_redundancy_money(s):
+                return ['background-color: #ffe0b2; color: #e65100' if float(v) > 0 else '' for v in s]
+
+            def highlight_transfer(s):
+                return ['background-color: #e3f2fd; color: #0d47a1; font-weight: bold' if float(v) > 0 else '' for v in s]
+
+            def highlight_fee(s):
+                return ['background-color: #e1bee7; color: #4a148c; font-weight: bold' if float(v) > 0 else '' for v in s]
+
+            st_df = df_display_vis.style.apply(highlight_zebra, axis=1)
+
+            # 加粗列（存在才加）
+            for c in ['产品编码', 'SKU名称']:
+                if c in df_display_vis.columns:
+                    st_df = st_df.apply(highlight_bold_cols, subset=[c])
+
+            # 条件高亮列（存在才加）
+            if '建议采购数' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_restock_qty, subset=['建议采购数'])
+            if '预计采购总额(RMB)' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_restock_money, subset=['预计采购总额(RMB)'])
+            if '冗余数量' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_redundancy_qty, subset=['冗余数量'])
+            if '冗余资金' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_redundancy_money, subset=['冗余资金'])
+            if '建议调拨数量' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_transfer, subset=['建议调拨数量'])
+            if '本月仓储费(预警)' in df_display_vis.columns:
+                st_df = st_df.apply(highlight_fee, subset=['本月仓储费(预警)'])
+
+            # 格式化（存在才format）
+            fmt_map = {}
+            for k in ['橙火库存', '极风库存', '库存合计', '7天销量', '建议采购数', '冗余数量', '建议调拨数量']:
+                if k in df_display_vis.columns:
+                    fmt_map[k] = '{:.0f}'
+            if f'总安全库存(有码>{min_safety_qty})' in df_display_vis.columns:
+                fmt_map[f'总安全库存(有码>{min_safety_qty})'] = '{:.0f}'
+            if f'冗余标准({redundancy_weeks}周)' in df_display_vis.columns:
+                fmt_map[f'冗余标准({redundancy_weeks}周)'] = '{:.0f}'
+            if f'橙火安全库存(有码>{min_safety_qty})' in df_display_vis.columns:
+                fmt_map[f'橙火安全库存(有码>{min_safety_qty})'] = '{:.0f}'
+            if '预计采购总额(RMB)' in df_display_vis.columns:
+                fmt_map['预计采购总额(RMB)'] = '{:,.0f}'
+            if '采购单价' in df_display_vis.columns:
+                fmt_map['采购单价'] = '{:,.0f}'
+            if '冗余资金' in df_display_vis.columns:
+                fmt_map['冗余资金'] = '{:,.0f}'
+            if '本月仓储费(预警)' in df_display_vis.columns:
+                fmt_map['本月仓储费(预警)'] = '{:,.0f}'
+
+            if fmt_map:
+                st_df = st_df.format(fmt_map)
+
+            st.dataframe(st_df, use_container_width=True, height=600, hide_index=True)
 
             # ==========================================
             # Excel 导出（Table + 按产品编码分组斑马纹 + 两列左对齐）
@@ -395,15 +509,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             with pd.ExcelWriter(out_io, engine='xlsxwriter') as writer:
                 wb = writer.book
 
-                # 基础格式
                 fmt_center = wb.add_format({'align': 'center', 'valign': 'vcenter'})
                 fmt_left = wb.add_format({'align': 'left', 'valign': 'vcenter'})
 
-                # 斑马纹：整行（默认居中）+ 左对齐版本（用于“基础信息/SKU名称”）
                 fmt_zebra_group = wb.add_format({'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter'})
                 fmt_zebra_left = wb.add_format({'bg_color': '#F2F2F2', 'align': 'left', 'valign': 'vcenter'})
 
-                # 条件高亮
                 fmt_red_bold = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
                 fmt_red_norm = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'bold': False, 'align': 'center', 'valign': 'vcenter'})
                 fmt_orange_bold = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C5700', 'bold': True, 'align': 'center', 'valign': 'vcenter'})
@@ -450,14 +561,12 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     hide_cols = hide_cols or []
                     fixed_width_cols = fixed_width_cols or []
 
-                    # ① 用原始“产品编码”生成分组 gid（0/1）——不能用置空后的版本
                     if '产品编码' in df_curr.columns and len(df_curr) > 0:
                         codes = df_curr['产品编码'].astype(str).fillna('')
                         gid = (codes.ne(codes.shift()).cumsum() % 2).astype(int)
                     else:
                         gid = pd.Series([0] * len(df_curr), dtype=int)
 
-                    # ② 再做视觉合并（重复置空）
                     df_write = df_curr.copy()
                     if '产品编码' in df_write.columns and '店铺名称' in df_write.columns:
                         df_write = blank_repeat_like_merge(df_write, '产品编码', ['店铺名称', '产品编码'])
@@ -467,10 +576,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
                     nrows, ncols = len(df_write), len(df_write.columns)
 
-                    # ③ Table：关闭自带banded_rows（我们用“按组斑马纹”替代）
                     columns = [{'header': c} for c in df_write.columns]
                     if ncols > 0:
-                        last_row = nrows if nrows > 0 else 0  # 包含表头行
+                        last_row = nrows if nrows > 0 else 0
                         ws.add_table(0, 0, last_row, ncols - 1, {
                             'columns': columns,
                             'style': 'Table Style Medium 9',
@@ -478,35 +586,29 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                             'banded_rows': False
                         })
 
-                    # ④ 列宽（估算autofit），基础信息固定宽
                     widths = estimate_col_widths(df_write, fixed_col_names=fixed_width_cols, fixed_width=fixed_width)
                     for i, w in enumerate(widths):
                         ws.set_column(i, i, w, fmt_center)
 
-                    # ✅ 两列内容左对齐（表头不变）
                     for colname in ['基础信息', 'SKU名称']:
                         if colname in df_write.columns:
                             cidx = list(df_write.columns).index(colname)
                             ws.set_column(cidx, cidx, widths[cidx], fmt_left)
 
-                    # ⑤ 写隐藏辅助列 _gid（放在表格右侧，避免进入Table）
                     helper_col = ncols
                     ws.write(0, helper_col, "_gid")
                     for i in range(nrows):
                         ws.write(i + 1, helper_col, int(gid.iloc[i]), fmt_center)
                     ws.set_column(helper_col, helper_col, None, None, {'hidden': True})
 
-                    # ⑥ 按 gid 做“按产品编码分组的斑马纹”
                     if nrows > 0 and ncols > 0:
                         helper_letter = col_to_excel(helper_col)
                         formula = f'=${helper_letter}2=1'
-                        # 整行斑马（默认）
                         ws.conditional_format(1, 0, nrows, ncols - 1, {
                             'type': 'formula',
                             'criteria': formula,
                             'format': fmt_zebra_group
                         })
-                        # ✅ 两列斑马下也保持左对齐
                         for colname in ['基础信息', 'SKU名称']:
                             if colname in df_write.columns:
                                 cidx = list(df_write.columns).index(colname)
@@ -516,41 +618,32 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                                     'format': fmt_zebra_left
                                 })
 
-                    # ⑦ 隐藏列（你之前的逻辑）
                     for c in hide_cols:
                         if 0 <= c < ncols:
                             ws.set_column(c, c, None, None, {'hidden': True})
 
-                    # ⑧ 其他条件高亮
                     apply_conditional(ws, df_write)
 
-                # Sheet1
                 build_table_sheet('补货计算表', df_sheet1, fixed_width_cols=['基础信息'], fixed_width=26)
 
-                # Sheet2
                 df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
                 build_table_sheet('采购单(找工厂)', df_buy, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[14, 15, 16, 17, 18, 19])
 
-                # Sheet3
                 df_trans = df_out_base[df_out_base['建议调拨数量'] > 0].copy()
                 build_table_sheet('调拨单(发橙火)', df_trans, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[12, 13, 14, 15, 16, 17, 19])
 
-                # Sheet4
                 df_fee = df_out_base[df_out_base['本月仓储费(预警)'] > 0].copy()
                 build_table_sheet('库龄预警单(需重入库)', df_fee, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
 
             excel_bytes = out_io.getvalue()
 
-            # ==========================================
-            # ✅ ZIP打包：Excel + 3个HTML工单
-            # ==========================================
+            # ZIP打包：Excel + 3个HTML工单
             stamp = pd.Timestamp.now().strftime('%Y%m%d')
             excel_name = f"Coupang_Restock_Full_v18_{stamp}.xlsx"
 
-            # HTML用原始df_buy/df_trans/df_fee（不做置空，便于工单识别）
             html_buy = make_work_order_html(df_buy, "采购工单（找工厂）", "范围：建议采购数 > 0")
             html_trans = make_work_order_html(df_trans, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
             html_fee = make_work_order_html(df_fee, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
