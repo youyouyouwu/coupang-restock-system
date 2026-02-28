@@ -331,16 +331,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
             df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
 
+            # --- ✅ 橙火安全库存（调拨预警）：不使用保底库存 ---
             df_final['Orange_Safety_Calc'] = df_final['Sales_7d'] * orange_safety_weeks
-
-            def apply_orange_floor(row):
-                base_val = row['Orange_Safety_Calc']
-                has_inbound = bool(str(row.get('Inbound_Code', '')).strip())
-                if has_inbound:
-                    return max(base_val, min_safety_qty)
-                return base_val
-
-            df_final['Orange_Safety_Std'] = df_final.apply(apply_orange_floor, axis=1)
+            df_final['Orange_Safety_Std'] = df_final['Orange_Safety_Calc']  # ✅ 不做max(..., min_safety_qty)
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
             # --- G. 整理输出 ---
@@ -370,7 +363,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
                 'Redundancy_Qty': '冗余数量',
                 'Redundancy_Money': '冗余资金',
-                'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})',
+                'Orange_Safety_Std': f'橙火安全库存(不含保底)',
                 'Orange_Transfer_Qty': '建议调拨数量',
                 'Storage_Fee': '本月仓储费(预警)'
             }
@@ -381,14 +374,14 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
             # ==========================================
-            # ✅ H. 搜索与KPI + 高亮看板（按产品编码分组斑马纹）
+            # H. 搜索与KPI + 高亮看板（按产品编码分组斑马纹）
             # ==========================================
             if search_key:
                 df_display = df_sheet1[df_sheet1['产品编码'].astype(str).str.contains(search_key, case=False, na=False)].copy()
             else:
                 df_display = df_sheet1.copy()
 
-            # KPI（按当前筛选后的df_display）
+            # KPI
             buy_mask = df_display.get('建议采购数', pd.Series([0] * len(df_display))).astype(float) > 0
             k1_cnt = int(buy_mask.sum())
             k1_val = float(df_display.loc[buy_mask, '预计采购总额(RMB)'].sum()) if '预计采购总额(RMB)' in df_display.columns else 0.0
@@ -412,15 +405,13 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
             m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
-            # 视觉置空（店铺名称/产品编码同一产品只显示一次）
+            # 视觉置空
             df_display_vis = df_display.copy()
             if '产品编码' in df_display_vis.columns:
                 first_in_group = df_display_vis['产品编码'].astype(str).fillna('').ne(df_display_vis['产品编码'].astype(str).shift())
                 for col in ['店铺名称', '产品编码']:
                     if col in df_display_vis.columns:
                         df_display_vis.loc[~first_in_group, col] = ''
-
-                # 按产品编码分组斑马纹
                 zebra_group_ids = (df_display['产品编码'].astype(str).fillna('').ne(df_display['产品编码'].astype(str).shift()).cumsum() % 2)
             else:
                 zebra_group_ids = pd.Series([0] * len(df_display_vis), index=df_display_vis.index)
@@ -435,7 +426,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 return [''] * len(row)
 
             def highlight_bold_cols(row):
-                # 用于“产品编码、SKU名称”整列加粗
                 return ['font-weight: bold'] * len(row)
 
             def highlight_restock_qty(s):
@@ -458,12 +448,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
             st_df = df_display_vis.style.apply(highlight_zebra, axis=1)
 
-            # 加粗列（存在才加）
             for c in ['产品编码', 'SKU名称']:
                 if c in df_display_vis.columns:
                     st_df = st_df.apply(highlight_bold_cols, subset=[c])
 
-            # 条件高亮列（存在才加）
             if '建议采购数' in df_display_vis.columns:
                 st_df = st_df.apply(highlight_restock_qty, subset=['建议采购数'])
             if '预计采购总额(RMB)' in df_display_vis.columns:
@@ -477,7 +465,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             if '本月仓储费(预警)' in df_display_vis.columns:
                 st_df = st_df.apply(highlight_fee, subset=['本月仓储费(预警)'])
 
-            # 格式化（存在才format）
             fmt_map = {}
             for k in ['橙火库存', '极风库存', '库存合计', '7天销量', '建议采购数', '冗余数量', '建议调拨数量']:
                 if k in df_display_vis.columns:
@@ -486,8 +473,6 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 fmt_map[f'总安全库存(有码>{min_safety_qty})'] = '{:.0f}'
             if f'冗余标准({redundancy_weeks}周)' in df_display_vis.columns:
                 fmt_map[f'冗余标准({redundancy_weeks}周)'] = '{:.0f}'
-            if f'橙火安全库存(有码>{min_safety_qty})' in df_display_vis.columns:
-                fmt_map[f'橙火安全库存(有码>{min_safety_qty})'] = '{:.0f}'
             if '预计采购总额(RMB)' in df_display_vis.columns:
                 fmt_map['预计采购总额(RMB)'] = '{:,.0f}'
             if '采购单价' in df_display_vis.columns:
@@ -626,21 +611,20 @@ if file_master and files_sales and files_inv_r and files_inv_j:
 
                 build_table_sheet('补货计算表', df_sheet1, fixed_width_cols=['基础信息'], fixed_width=26)
 
-                df_buy = df_out_base[df_out_base['建议采购数'] > 0].copy()
                 build_table_sheet('采购单(找工厂)', df_buy, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[14, 15, 16, 17, 18, 19])
 
-                df_trans = df_out_base[df_out_base['建议调拨数量'] > 0].copy()
                 build_table_sheet('调拨单(发橙火)', df_trans, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[12, 13, 14, 15, 16, 17, 19])
 
-                df_fee = df_out_base[df_out_base['本月仓储费(预警)'] > 0].copy()
                 build_table_sheet('库龄预警单(需重入库)', df_fee, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
 
             excel_bytes = out_io.getvalue()
 
+            # ==========================================
             # ZIP打包：Excel + 3个HTML工单
+            # ==========================================
             stamp = pd.Timestamp.now().strftime('%Y%m%d')
             excel_name = f"Coupang_Restock_Full_v18_{stamp}.xlsx"
 
