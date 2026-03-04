@@ -267,7 +267,7 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
                 st.error("❌ 基础表列数不足，请检查列配置！")
                 st.stop()
 
-            # --- B. 销售汇总（近7天）---
+            # --- B. 销售汇总 (近7天) ---
             s_list_7d = [read_file(f) for f in files_sales_7d]
             if not s_list_7d:
                 st.stop()
@@ -276,7 +276,7 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
             df_sales_7d['Qty'] = clean_num(df_sales_7d.iloc[:, IDX_7D_QTY])
             agg_sales_7d = df_sales_7d.groupby('Key')['Qty'].sum().reset_index()
 
-            # --- C. 销售汇总（近30天）---
+            # --- C. 销售汇总 (近30天) ---
             s_list_30d = [read_file(f) for f in files_sales_30d]
             if not s_list_30d:
                 st.stop()
@@ -337,7 +337,4 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
                 is_active = (str(row.get('Active', '')).strip().upper() == 'Y')
                 has_inbound = bool(str(row.get('Inbound_Code', '')).strip())
                 if is_active and has_inbound:
-                    return max(base_val, min_safety_qty)
-                return base_val
-
-            df_final['Safety'] = df_final.apply(apply_safety_floor,
+                    return max(base_val, min_safety_qty
