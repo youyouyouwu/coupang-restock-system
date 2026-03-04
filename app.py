@@ -26,13 +26,9 @@ IDX_M_ORANGE  = 3    # D列: 橙火ID
 IDX_M_INBOUND = 12   # M列: 入库码
 IDX_M_ACTIVE  = 13   # N列: 是否在做 (有Y=在做，大小写容错)
 
-# --- 2.1 销售表 (近7天) ---
+# --- 2. 销售表 (近7天) ---
 IDX_7D_SKU    = 0    # A列: SKU/ID
 IDX_7D_QTY    = 8    # I列: 销售数量
-
-# --- 2.2 销售表 (近30天) ---
-IDX_30D_SKU   = 0    # A列: SKU/ID
-IDX_30D_QTY   = 8    # I列: 销售数量（30天）
 
 # --- 3. 火箭仓/橙火库存表 ---
 IDX_INV_R_SKU = 2    # C列: SKU/ID
@@ -202,6 +198,12 @@ def make_work_order_html(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
 """
     return html.encode("utf-8")
 
+def _safe_float(x):
+    try:
+        return float(x)
+    except:
+        return 0.0
+
 # ==========================================
 # 4. 侧边栏
 # ==========================================
@@ -232,8 +234,8 @@ with st.sidebar:
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
     file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['xlsx', 'csv'])
-    files_sales_7d = st.file_uploader("2.1 销售表 (近7天) *单选", type=['xlsx', 'csv'])
-    files_sales_30d = st.file_uploader("2.2 销售表 (近30天) *单选", type=['xlsx', 'csv'])
+    files_sales_7d = st.file_uploader("2.1 销售表 (近7天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
+    files_sales_30d = st.file_uploader("2.2 销售表 (近30天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_r = st.file_uploader("3. 橙火/火箭仓库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_j = st.file_uploader("4. 极风库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
 
@@ -265,19 +267,25 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
                 st.error("❌ 基础表列数不足，请检查列配置！")
                 st.stop()
 
-            # --- B. 销售汇总 --- 近7天
-            df_sales_7d = read_file(files_sales_7d)
+            # --- B. 销售汇总（近7天）---
+            s_list_7d = [read_file(f) for f in files_sales_7d]
+            if not s_list_7d:
+                st.stop()
+            df_sales_7d = pd.concat(s_list_7d, ignore_index=True)
             df_sales_7d['Key'] = clean_match_key(df_sales_7d.iloc[:, IDX_7D_SKU])
-            df_sales_7d['Qty_7d'] = clean_num(df_sales_7d.iloc[:, IDX_7D_QTY])
-            agg_sales_7d = df_sales_7d.groupby('Key')['Qty_7d'].sum().reset_index()
+            df_sales_7d['Qty'] = clean_num(df_sales_7d.iloc[:, IDX_7D_QTY])
+            agg_sales_7d = df_sales_7d.groupby('Key')['Qty'].sum().reset_index()
 
-            # --- C. 销售汇总 --- 近30天
-            df_sales_30d = read_file(files_sales_30d)
-            df_sales_30d['Key'] = clean_match_key(df_sales_30d.iloc[:, IDX_30D_SKU])
-            df_sales_30d['Qty_30d'] = clean_num(df_sales_30d.iloc[:, IDX_30D_QTY])
-            agg_sales_30d = df_sales_30d.groupby('Key')['Qty_30d'].sum().reset_index()
+            # --- C. 销售汇总（近30天）---
+            s_list_30d = [read_file(f) for f in files_sales_30d]
+            if not s_list_30d:
+                st.stop()
+            df_sales_30d = pd.concat(s_list_30d, ignore_index=True)
+            df_sales_30d['Key'] = clean_match_key(df_sales_30d.iloc[:, IDX_7D_SKU])
+            df_sales_30d['Qty'] = clean_num(df_sales_30d.iloc[:, IDX_7D_QTY])
+            agg_sales_30d = df_sales_30d.groupby('Key')['Qty'].sum().reset_index()
 
-            # --- D. 火箭仓库存 ---
+            # --- D. 橙火库存 ---
             r_list = [read_file(f) for f in files_inv_r]
             if r_list:
                 df_r = pd.concat(r_list, ignore_index=True)
@@ -303,10 +311,10 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
 
             # --- F. 匹配合并 ---
             df_final = pd.merge(df_base, agg_sales_7d, left_on='Orange_ID', right_on='Key', how='left')
-            df_final.rename(columns={'Qty_7d': 'Sales_7d'}, inplace=True)
+            df_final.rename(columns={'Qty': 'Sales_7d'}, inplace=True)
 
-            df_final = pd.merge(df_final, agg_sales_30d, left_on='Orange_ID', right_on='Key', how='left')
-            df_final.rename(columns={'Qty_30d': 'Sales_30d'}, inplace=True)
+            df_final = pd.merge(df_final, agg_sales_30d, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_30d'))
+            df_final.rename(columns={'Qty': 'Sales_30d'}, inplace=True)
 
             df_final = pd.merge(df_final, agg_orange, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_R'))
             df_final.rename(columns={'Qty': 'Stock_Orange', 'Fee': 'Storage_Fee'}, inplace=True)
@@ -327,4 +335,9 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
             def apply_safety_floor(row):
                 base_val = row['Safety_Calc']
                 is_active = (str(row.get('Active', '')).strip().upper() == 'Y')
-                has_inbound = bool(str(row.get('Inbound
+                has_inbound = bool(str(row.get('Inbound_Code', '')).strip())
+                if is_active and has_inbound:
+                    return max(base_val, min_safety_qty)
+                return base_val
+
+            df_final['Safety'] = df_final.apply(apply_safety_floor,
