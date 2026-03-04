@@ -234,15 +234,14 @@ with st.sidebar:
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
     file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['xlsx', 'csv'])
-    files_sales_7d = st.file_uploader("2.1 销售表 (近7天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
-    files_sales_30d = st.file_uploader("2.2 销售表 (近30天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
+    files_sales = st.file_uploader("2. 销售表 (近7天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_r = st.file_uploader("3. 橙火/火箭仓库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_j = st.file_uploader("4. 极风库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
 
 # ==========================================
 # 5. 主逻辑
 # ==========================================
-if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_inv_j:
+if file_master and files_sales and files_inv_r and files_inv_j:
     if st.button("🚀 生成定制报表", type="primary", use_container_width=True):
         with st.spinner("正在按指定列顺序匹配数据..."):
 
@@ -267,25 +266,16 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
                 st.error("❌ 基础表列数不足，请检查列配置！")
                 st.stop()
 
-            # --- B. 销售汇总 (近7天) ---
-            s_list_7d = [read_file(f) for f in files_sales_7d]
-            if not s_list_7d:
+            # --- B. 销售汇总 ---
+            s_list = [read_file(f) for f in files_sales]
+            if not s_list:
                 st.stop()
-            df_sales_7d = pd.concat(s_list_7d, ignore_index=True)
-            df_sales_7d['Key'] = clean_match_key(df_sales_7d.iloc[:, IDX_7D_SKU])
-            df_sales_7d['Qty'] = clean_num(df_sales_7d.iloc[:, IDX_7D_QTY])
-            agg_sales_7d = df_sales_7d.groupby('Key')['Qty'].sum().reset_index()
+            df_sales = pd.concat(s_list, ignore_index=True)
+            df_sales['Key'] = clean_match_key(df_sales.iloc[:, IDX_7D_SKU])
+            df_sales['Qty'] = clean_num(df_sales.iloc[:, IDX_7D_QTY])
+            agg_sales = df_sales.groupby('Key')['Qty'].sum().reset_index()
 
-            # --- C. 销售汇总 (近30天) ---
-            s_list_30d = [read_file(f) for f in files_sales_30d]
-            if not s_list_30d:
-                st.stop()
-            df_sales_30d = pd.concat(s_list_30d, ignore_index=True)
-            df_sales_30d['Key'] = clean_match_key(df_sales_30d.iloc[:, IDX_7D_SKU])
-            df_sales_30d['Qty'] = clean_num(df_sales_30d.iloc[:, IDX_7D_QTY])
-            agg_sales_30d = df_sales_30d.groupby('Key')['Qty'].sum().reset_index()
-
-            # --- D. 橙火库存 ---
+            # --- C. 橙火库存 ---
             r_list = [read_file(f) for f in files_inv_r]
             if r_list:
                 df_r = pd.concat(r_list, ignore_index=True)
@@ -299,7 +289,7 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
             else:
                 agg_orange = pd.DataFrame(columns=['Key', 'Qty', 'Fee'])
 
-            # --- E. 极风库存 ---
+            # --- D. 极风库存 ---
             j_list = [read_file(f) for f in files_inv_j]
             if j_list:
                 df_j = pd.concat(j_list, ignore_index=True)
@@ -309,12 +299,9 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
             else:
                 agg_jifeng = pd.DataFrame(columns=['Key', 'Qty'])
 
-            # --- F. 匹配合并 ---
-            df_final = pd.merge(df_base, agg_sales_7d, left_on='Orange_ID', right_on='Key', how='left')
+            # --- E. 匹配合并 ---
+            df_final = pd.merge(df_base, agg_sales, left_on='Orange_ID', right_on='Key', how='left')
             df_final.rename(columns={'Qty': 'Sales_7d'}, inplace=True)
-
-            df_final = pd.merge(df_final, agg_sales_30d, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_30d'))
-            df_final.rename(columns={'Qty': 'Sales_30d'}, inplace=True)
 
             df_final = pd.merge(df_final, agg_orange, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_R'))
             df_final.rename(columns={'Qty': 'Stock_Orange', 'Fee': 'Storage_Fee'}, inplace=True)
@@ -322,9 +309,8 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
-            # --- G. 计算逻辑 ---
+            # --- F. 计算逻辑 ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
-            df_final['Sales_30d'] = df_final['Sales_30d'].fillna(0)
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
             df_final['Storage_Fee'] = df_final['Storage_Fee'].fillna(0)
@@ -337,4 +323,20 @@ if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_
                 is_active = (str(row.get('Active', '')).strip().upper() == 'Y')
                 has_inbound = bool(str(row.get('Inbound_Code', '')).strip())
                 if is_active and has_inbound:
-                    return max(base_val, min_safety_qty
+                    return max(base_val, min_safety_qty)
+                return base_val
+
+            df_final['Safety'] = df_final.apply(apply_safety_floor, axis=1)
+            df_final['Redundancy_Std'] = df_final['Sales_7d'] * redundancy_weeks
+
+            df_final['Restock_Qty'] = (df_final['Safety'] - df_final['Total_Stock']).apply(lambda x: int(x) if x > 0 else 0)
+            inactive_mask = df_final['Active'].astype(str).str.upper().ne('Y')
+            df_final.loc[inactive_mask, 'Restock_Qty'] = 0
+            df_final['Restock_Money'] = df_final['Restock_Qty'] * df_final['Cost']
+
+            df_final['Redundancy_Qty'] = (df_final['Total_Stock'] - df_final['Redundancy_Std']).apply(lambda x: int(x) if x > 0 else 0)
+            df_final['Redundancy_Money'] = df_final['Redundancy_Qty'] * df_final['Cost']
+
+            # ✅ 调拨：不计算保底库存
+            df_final['Orange_Safety_Calc'] = df_final['Sales_7d'] * orange_safety_weeks
+            df_final['Orange_S
