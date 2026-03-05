@@ -26,9 +26,13 @@ IDX_M_ORANGE  = 3    # D列: 橙火ID
 IDX_M_INBOUND = 12   # M列: 入库码
 IDX_M_ACTIVE  = 13   # N列: 是否在做 (有Y=在做，大小写容错)
 
-# --- 2. 销售表 (近7天) ---
+# --- 2.1 销售表 (近7天) ---
 IDX_7D_SKU    = 0    # A列: SKU/ID
 IDX_7D_QTY    = 8    # I列: 销售数量
+
+# --- 2.2 销售表 (近30天) ---
+IDX_30D_SKU   = 0    # A列: SKU/ID
+IDX_30D_QTY   = 8    # I列: 销售数量
 
 # --- 3. 火箭仓/橙火库存表 ---
 IDX_INV_R_SKU = 2    # C列: SKU/ID
@@ -234,14 +238,15 @@ with st.sidebar:
     st.divider()
     st.info("📂 请上传文件 (保持Master顺序)")
     file_master = st.file_uploader("1. 基础信息表 (Master) *必传", type=['xlsx', 'csv'])
-    files_sales = st.file_uploader("2. 销售表 (近7天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
+    files_sales_7d = st.file_uploader("2.1 销售表 (近7天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
+    files_sales_30d = st.file_uploader("2.2 销售表 (近30天) *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_r = st.file_uploader("3. 橙火/火箭仓库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
     files_inv_j = st.file_uploader("4. 极风库存 *多选", type=['xlsx', 'csv'], accept_multiple_files=True)
 
 # ==========================================
 # 5. 主逻辑
 # ==========================================
-if file_master and files_sales and files_inv_r and files_inv_j:
+if file_master and files_sales_7d and files_sales_30d and files_inv_r and files_inv_j:
     if st.button("🚀 生成定制报表", type="primary", use_container_width=True):
         with st.spinner("正在按指定列顺序匹配数据..."):
 
@@ -266,14 +271,23 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 st.error("❌ 基础表列数不足，请检查列配置！")
                 st.stop()
 
-            # --- B. 销售汇总 ---
-            s_list = [read_file(f) for f in files_sales]
-            if not s_list:
+            # --- B1. 销售汇总 (近7天) ---
+            s_list_7d = [read_file(f) for f in files_sales_7d]
+            if not s_list_7d:
                 st.stop()
-            df_sales = pd.concat(s_list, ignore_index=True)
-            df_sales['Key'] = clean_match_key(df_sales.iloc[:, IDX_7D_SKU])
-            df_sales['Qty'] = clean_num(df_sales.iloc[:, IDX_7D_QTY])
-            agg_sales = df_sales.groupby('Key')['Qty'].sum().reset_index()
+            df_sales_7d = pd.concat(s_list_7d, ignore_index=True)
+            df_sales_7d['Key'] = clean_match_key(df_sales_7d.iloc[:, IDX_7D_SKU])
+            df_sales_7d['Qty'] = clean_num(df_sales_7d.iloc[:, IDX_7D_QTY])
+            agg_sales_7d = df_sales_7d.groupby('Key')['Qty'].sum().reset_index()
+
+            # --- B2. 销售汇总 (近30天，仅展示) ---
+            s_list_30d = [read_file(f) for f in files_sales_30d]
+            if not s_list_30d:
+                st.stop()
+            df_sales_30d = pd.concat(s_list_30d, ignore_index=True)
+            df_sales_30d['Key'] = clean_match_key(df_sales_30d.iloc[:, IDX_30D_SKU])
+            df_sales_30d['Qty'] = clean_num(df_sales_30d.iloc[:, IDX_30D_QTY])
+            agg_sales_30d = df_sales_30d.groupby('Key')['Qty'].sum().reset_index()
 
             # --- C. 橙火库存 ---
             r_list = [read_file(f) for f in files_inv_r]
@@ -300,8 +314,11 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 agg_jifeng = pd.DataFrame(columns=['Key', 'Qty'])
 
             # --- E. 匹配合并 ---
-            df_final = pd.merge(df_base, agg_sales, left_on='Orange_ID', right_on='Key', how='left')
+            df_final = pd.merge(df_base, agg_sales_7d, left_on='Orange_ID', right_on='Key', how='left')
             df_final.rename(columns={'Qty': 'Sales_7d'}, inplace=True)
+
+            df_final = pd.merge(df_final, agg_sales_30d, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_30d'))
+            df_final.rename(columns={'Qty': 'Sales_30d'}, inplace=True)
 
             df_final = pd.merge(df_final, agg_orange, left_on='Orange_ID', right_on='Key', how='left', suffixes=('', '_R'))
             df_final.rename(columns={'Qty': 'Stock_Orange', 'Fee': 'Storage_Fee'}, inplace=True)
@@ -309,8 +326,9 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final = pd.merge(df_final, agg_jifeng, left_on='Inbound_Code', right_on='Key', how='left', suffixes=('', '_J'))
             df_final.rename(columns={'Qty': 'Stock_Jifeng'}, inplace=True)
 
-            # --- F. 计算逻辑 ---
+            # --- F. 计算逻辑（不使用30天） ---
             df_final['Sales_7d'] = df_final['Sales_7d'].fillna(0)
+            df_final['Sales_30d'] = df_final['Sales_30d'].fillna(0)  # 仅展示用
             df_final['Stock_Orange'] = df_final['Stock_Orange'].fillna(0)
             df_final['Stock_Jifeng'] = df_final['Stock_Jifeng'].fillna(0)
             df_final['Storage_Fee'] = df_final['Storage_Fee'].fillna(0)
@@ -342,7 +360,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             df_final['Orange_Safety_Std'] = df_final['Orange_Safety_Calc']  # 不做 max(..., min_safety_qty)
             df_final['Orange_Transfer_Qty'] = (df_final['Orange_Safety_Std'] - df_final['Stock_Orange']).apply(lambda x: int(x) if x > 0 else 0)
 
-            # --- G. 整理输出 ---
+            # --- G. 整理输出（保持原结构，不把30天写进基础df_out_base） ---
             cols_export_base = [
                 'Shop', 'Code', 'Info_E', 'Info_F', 'Cost', 'Orange_ID', 'Inbound_Code',
                 'Sales_7d', 'Stock_Orange', 'Stock_Jifeng', 'Total_Stock', 'Safety',
@@ -369,24 +387,43 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 'Redundancy_Std': f'冗余标准({redundancy_weeks}周)',
                 'Redundancy_Qty': '冗余数量',
                 'Redundancy_Money': '冗余资金',
-                # ✅ 列名保持原样（避免你看板/导出依赖列名出问题）
                 'Orange_Safety_Std': f'橙火安全库存(有码>{min_safety_qty})',
                 'Orange_Transfer_Qty': '建议调拨数量',
                 'Storage_Fee': '本月仓储费(预警)'
             }
             df_out_base.rename(columns=header_map_base, inplace=True)
 
-            # ✅ 关键修复：提前定义 df_buy / df_trans / df_fee（供导出 + 打包使用）
-            df_buy = df_out_base[df_out_base['建议采购数'].astype(float) > 0].copy()
-            df_trans = df_out_base[df_out_base['建议调拨数量'].astype(float) > 0].copy()
-            df_fee = df_out_base[df_out_base['本月仓储费(预警)'].astype(float) > 0].copy()
+            # ✅ 采购/调拨/预警表（先按原逻辑筛选）
+            df_buy = df_out_base[df_out_base['建议采购数'].map(_safe_float) > 0].copy()
+            df_trans = df_out_base[df_out_base['建议调拨数量'].map(_safe_float) > 0].copy()
+            df_fee = df_out_base[df_out_base['本月仓储费(预警)'].map(_safe_float) > 0].copy()
 
-            # Sheet1/展示专用：插入“在做(Y)”列
+            # ===============================
+            # ✅ 插入“30天销量”（仅展示用，不参与运算）
+            # - df_sheet1：用于streamlit预览 + sheet1导出
+            # - df_buy：用于sheet2导出 + 采购工单HTML
+            # ===============================
+            sales_30d_series = df_final['Sales_30d'].map(_safe_float).values
+
+            # Sheet1/展示专用：插入“在做(Y)”列 + 30天销量
             df_sheet1 = df_out_base.copy()
             df_sheet1.insert(1, '在做(Y)', df_final['Active'].values)
 
+            if '7天销量' in df_sheet1.columns:
+                pos_7d = df_sheet1.columns.get_loc('7天销量')
+                df_sheet1.insert(pos_7d + 1, '30天销量', sales_30d_series)
+
+            # 采购单：在 7天销量 后插入 30天销量（落在 7天销量 与 橙火库存 中间）
+            df_buy_with30 = df_buy.copy()
+            if len(df_buy_with30) > 0 and '7天销量' in df_buy_with30.columns:
+                # 按产品编码映射到30天（因为df_buy是df_out_base过滤后的子集）
+                # df_out_base 的行顺序与 df_final 对齐，所以可用 df_buy.index 去取 df_final 的 Sales_30d
+                sales_30d_buy = df_final.loc[df_buy_with30.index, 'Sales_30d'].map(_safe_float).values
+                pos_7d_buy = df_buy_with30.columns.get_loc('7天销量')
+                df_buy_with30.insert(pos_7d_buy + 1, '30天销量', sales_30d_buy)
+
             # ==========================================
-            # H. 搜索与KPI + 高亮看板（按产品编码分组斑马纹）
+            # ✅ H. 搜索与KPI + 高亮看板（按产品编码分组斑马纹）
             # ==========================================
             if search_key:
                 df_display = df_sheet1[df_sheet1['产品编码'].astype(str).str.contains(search_key, case=False, na=False)].copy()
@@ -416,6 +453,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             m3.metric("**🚚 需调拨 SKU / 数量**", f"{k3_cnt} 个", f"{k3_val:,.0f} 件")
             m4.metric("**🚨 库龄预警 SKU / 总仓储费**", f"{k4_cnt} 个", f"₩ {k4_val:,.0f}", delta_color="inverse")
 
+            # 视觉置空（店铺名称/产品编码同一产品只显示一次）
             df_display_vis = df_display.copy()
             if '产品编码' in df_display_vis.columns:
                 first_in_group = df_display_vis['产品编码'].astype(str).fillna('').ne(df_display_vis['产品编码'].astype(str).shift())
@@ -476,7 +514,7 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                 st_df = st_df.apply(highlight_fee, subset=['本月仓储费(预警)'])
 
             fmt_map = {}
-            for k in ['橙火库存', '极风库存', '库存合计', '7天销量', '建议采购数', '冗余数量', '建议调拨数量']:
+            for k in ['橙火库存', '极风库存', '库存合计', '7天销量', '30天销量', '建议采购数', '冗余数量', '建议调拨数量']:
                 if k in df_display_vis.columns:
                     fmt_map[k] = '{:.0f}'
             if f'总安全库存(有码>{min_safety_qty})' in df_display_vis.columns:
@@ -554,9 +592,10 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                     cf('建议调拨数量', 'blue')
                     cf('本月仓储费(预警)', 'purple')
 
-                def build_table_sheet(sheet_name, df_curr, fixed_width_cols=None, fixed_width=26, hide_cols=None):
+                def build_table_sheet(sheet_name, df_curr, fixed_width_cols=None, fixed_width=26, hide_cols=None, bold_value_cols=None):
                     hide_cols = hide_cols or []
                     fixed_width_cols = fixed_width_cols or []
+                    bold_value_cols = bold_value_cols or []
 
                     if '产品编码' in df_curr.columns and len(df_curr) > 0:
                         codes = df_curr['产品编码'].astype(str).fillna('')
@@ -615,20 +654,38 @@ if file_master and files_sales and files_inv_r and files_inv_j:
                                     'format': fmt_zebra_left
                                 })
 
+                    # ✅ 指定列“数值加粗”（不影响表头）
+                    if nrows > 0:
+                        col_idx_map = {c: i for i, c in enumerate(df_write.columns)}
+                        for cname in bold_value_cols:
+                            if cname in col_idx_map:
+                                c = col_idx_map[cname]
+                                ws.conditional_format(1, c, nrows, c, {'type': 'formula', 'criteria': '=TRUE', 'format': fmt_bold})
+
                     for c in hide_cols:
                         if 0 <= c < ncols:
                             ws.set_column(c, c, None, None, {'hidden': True})
 
                     apply_conditional(ws, df_write)
 
+                # sheet1：补货计算表（含在做列 + 30天销量）
                 build_table_sheet('补货计算表', df_sheet1, fixed_width_cols=['基础信息'], fixed_width=26)
 
-                build_table_sheet('采购单(找工厂)', df_buy, fixed_width_cols=['基础信息'], fixed_width=26,
-                                  hide_cols=[14, 15, 16, 17, 18, 19])
+                # sheet2：采购单（插入30天销量；并加粗7天/30天两列数值）
+                build_table_sheet(
+                    '采购单(找工厂)',
+                    df_buy_with30,
+                    fixed_width_cols=['基础信息'],
+                    fixed_width=26,
+                    hide_cols=[14, 15, 16, 17, 18, 19],  # 沿用你原来的隐藏列逻辑（基于原sheet2列结构）
+                    bold_value_cols=['7天销量', '30天销量']
+                )
 
+                # sheet3：调拨单（保持原样）
                 build_table_sheet('调拨单(发橙火)', df_trans, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[12, 13, 14, 15, 16, 17, 19])
 
+                # sheet4：库龄预警单（保持原样）
                 build_table_sheet('库龄预警单(需重入库)', df_fee, fixed_width_cols=['基础信息'], fixed_width=26,
                                   hide_cols=[11, 12, 13, 14, 15, 16, 17, 18])
 
@@ -640,7 +697,8 @@ if file_master and files_sales and files_inv_r and files_inv_j:
             stamp = pd.Timestamp.now().strftime('%Y%m%d')
             excel_name = f"Coupang_Restock_Full_v18_{stamp}.xlsx"
 
-            html_buy = make_work_order_html(df_buy, "采购工单（找工厂）", "范围：建议采购数 > 0")
+            # 采购工单HTML使用带30天销量版本
+            html_buy = make_work_order_html(df_buy_with30, "采购工单（找工厂）", "范围：建议采购数 > 0")
             html_trans = make_work_order_html(df_trans, "调拨工单（发橙火）", "范围：建议调拨数量 > 0")
             html_fee = make_work_order_html(df_fee, "库龄预警工单（需重入库）", "范围：本月仓储费(预警) > 0")
 
